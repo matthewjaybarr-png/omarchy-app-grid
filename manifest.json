@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "matt.launcher",
+  "name": "App Launcher",
+  "version": "0.1.0",
+  "author": "matt",
+  "license": "MIT",
+  "description": "GNOME-style full-screen app grid. Opens with SUPER+ALT+SPACE or a 3-finger swipe up that follows your fingers; swipe down to close.",
+  "kinds": ["menu"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "menu": "Launcher.qml"
+  }
+}
