@@ -32,6 +32,74 @@ Item {
     source: "file://" + (root.omarchyPath || "/usr/share/omarchy") + "/shell/services/AppLibrary.qml"
   }
 
+  // ---- sharp icons ----
+  //
+  // Omarchy's icon index keeps whichever file find() returns first for a name,
+  // and inside hicolor that is usually the 16x16 PNG — fine on a 24px bar,
+  // mush at 96px. SVGs are already right (its scan emits them first), so this
+  // only overrides names that resolved to a PNG, picking the biggest one.
+
+  property var pngIndex: ({})
+  property var pendingPngIndex: ({})
+
+  function pngScanCommand() {
+    return [
+      'dirs="$HOME/.icons $HOME/.local/share/icons";',
+      'IFS=":"; for d in ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do dirs="$dirs $d/icons"; done; unset IFS;',
+      'for base in $dirs; do',
+      '  [[ -d $base ]] && find "$base" \\( -path "*/apps/*" -o -path "*/devices/*" \\) -name "*.png" 2>/dev/null;',
+      'done;',
+      'find /usr/share/pixmaps -maxdepth 1 -name "*.png" 2>/dev/null'
+    ].join(' ')
+  }
+
+  // "…/256x256/apps/x.png" -> 256, "…/48x48@2x/…" -> 96. Sizeless dirs
+  // (/usr/share/pixmaps) score 48, the usual size there, so a real 256 wins
+  // and a real 16 does not.
+  function pngPixels(path) {
+    var m = /\/(\d+)x\d+(?:@(\d+)x)?\//.exec(path)
+    if (!m) return 48
+    return parseInt(m[1], 10) * (m[2] ? parseInt(m[2], 10) : 1)
+  }
+
+  function indexPngLine(path) {
+    var value = String(path || "").trim()
+    if (value.length === 0) return
+    var file = value.slice(value.lastIndexOf("/") + 1)
+    var name = file.slice(0, file.lastIndexOf("."))
+    if (name.length === 0) return
+    var size = root.pngPixels(value)
+    var best = root.pendingPngIndex[name]
+    if (!best || size > best.size) root.pendingPngIndex[name] = { path: value, size: size }
+  }
+
+  function iconSource(icon) {
+    if (!root.appLibrary) return ""
+    var source = root.appLibrary.iconSource(icon)
+    var best = root.pngIndex[String(icon || "")]
+    if (best && /\.png$/i.test(String(source))) return Util.fileUrl(best.path)
+    return source
+  }
+
+  Process {
+    id: pngScan
+    command: ["bash", "-c", root.pngScanCommand()]
+    stdout: SplitParser { onRead: function(line) { root.indexPngLine(line) } }
+    onStarted: root.pendingPngIndex = ({})
+    // Swapping the whole map re-evaluates every iconSource() binding at once.
+    onExited: root.pngIndex = root.pendingPngIndex
+  }
+
+  // Rescan when Omarchy's own index changes, so a freshly installed app's icon
+  // appears at the same moment its entry does.
+  Connections {
+    target: root.appLibrary
+    ignoreUnknownSignals: true
+    function onIconIndexChanged() { if (!pngScan.running) pngScan.running = true }
+  }
+
+  Component.onCompleted: pngScan.running = true
+
   // ---- host lifecycle ----
   // The host reads `opened` for toggle(). It is the *target* state: it drops
   // to false as soon as a close starts, so a keypress during the close
@@ -60,7 +128,11 @@ Item {
       apps: root.apps.length,
       all: root.appLibrary ? root.appLibrary.sortedEntries("").length : -1,
       opened: root.opened, progress: root.progress, page: root.page,
-      columns: root.columns, rows: root.rows, screen: [root.screenWidth, root.screenHeight]
+      columns: root.columns, rows: root.rows, screen: [root.screenWidth, root.screenHeight],
+      pngIndex: Object.keys(root.pngIndex).length,
+      // Last scroll event seen, for working out whether two-finger paging is
+      // reaching the surface at all.
+      wheel: root.lastWheel
     })
   }
 
@@ -281,9 +353,15 @@ Item {
   property bool pageDragging: false
   property string dragAxis: ""
   property real wheelAccumulator: 0
+  property var lastWheel: null
 
   function handleWheel(event) {
     var touchpad = event.phase !== Qt.NoScrollPhase || event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0
+    root.lastWheel = {
+      phase: event.phase, touchpad: touchpad,
+      pixel: [event.pixelDelta.x, event.pixelDelta.y],
+      angle: [event.angleDelta.x, event.angleDelta.y]
+    }
     if (!touchpad) {
       root.wheelAccumulator += event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x
       while (root.wheelAccumulator <= -120) { root.goToPage(root.page + 1); root.wheelAccumulator += 120 }
@@ -381,11 +459,6 @@ Item {
     MouseArea {
       anchors.fill: parent
       onClicked: root.requestClose()
-    }
-
-    WheelHandler {
-      target: null
-      onWheel: function(event) { root.handleWheel(event) }
     }
 
     Item {
@@ -515,6 +588,18 @@ Item {
         }
       }
 
+      // Scroll catcher. A WheelHandler parented straight to the window's
+      // content item never gets delivered anything (clicks still work), so it
+      // lives on a real full-size Item laid over the grid. A plain Item does
+      // not accept mouse buttons, so tiles below stay clickable.
+      Item {
+        anchors.fill: parent
+        WheelHandler {
+          acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+          onWheel: function(event) { root.handleWheel(event) }
+        }
+      }
+
       // Page dots
       Row {
         visible: root.pageCount > 1
@@ -570,7 +655,7 @@ Item {
       fillMode: Image.PreserveAspectFit
       sourceSize.width: width * Screen.devicePixelRatio
       sourceSize.height: height * Screen.devicePixelRatio
-      source: tile.entry && root.appLibrary ? root.appLibrary.iconSource(tile.entry.icon) : ""
+      source: tile.entry ? root.iconSource(tile.entry.icon) : ""
       asynchronous: true
       scale: hover.pressed ? 0.92 : 1
       Behavior on scale { NumberAnimation { duration: 90 } }
