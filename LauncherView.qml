@@ -138,6 +138,8 @@ Item {
             drop: root.dropIndex, dash: root.dropOnDash ? root.dashDropIndex : -1 }
         : null,
       order: root.order.length,
+      folders: root.folderItems.length,
+      openFolder: root.openFolderId,
       // Last scroll event seen, for working out whether two-finger paging is
       // reaching the surface at all.
       wheel: root.lastWheel
@@ -199,8 +201,15 @@ Item {
     // Hidden apps drop out of the grid but still turn up in search, dimmed, so
     // there is always a way back to the menu that unhides them.
     if (root.query.length === 0) {
-      entries = entries.filter(function(entry) { return !root.isHidden(entry.id) })
-      entries = root.orderedEntries(entries)
+      var folders = root.folderItems
+      var filed = ({})
+      for (var f = 0; f < folders.length; f++)
+        for (var m = 0; m < folders[f].members.length; m++)
+          filed[String(folders[f].members[m].id)] = true
+      entries = entries.filter(function(entry) {
+        return !root.isHidden(entry.id) && !filed[String(entry.id)]
+      })
+      entries = root.orderedEntries(entries.concat(folders))
     }
     root.apps = entries
     if (root.page >= root.pageCount) root.page = Math.max(0, root.pageCount - 1)
@@ -279,16 +288,118 @@ Item {
       property var favourites: []
       property var hidden: []
       property var order: []
+      property var folders: []
     }
+  }
+
+  // sortedEntries() is a function, so bindings on it need something to change
+  // when the library reloads.
+  property int libraryEpoch: 0
+
+  readonly property var entryById: {
+    root.libraryEpoch
+    var all = root.appLibrary ? root.appLibrary.sortedEntries("") : []
+    var byId = ({})
+    for (var i = 0; i < all.length; i++) byId[String(all[i].entry.id)] = all[i].entry
+    return byId
   }
 
   // Entries for the favourites row, in pinned order, skipping ids that no
   // longer resolve to an installed app.
   readonly property var favouriteEntries: {
-    var all = root.appLibrary ? root.appLibrary.sortedEntries("") : []
-    var byId = ({})
-    for (var i = 0; i < all.length; i++) byId[String(all[i].entry.id)] = all[i].entry
-    return root.favourites.map(function(id) { return byId[id] }).filter(function(e) { return !!e })
+    return root.favourites.map(function(id) { return root.entryById[id] })
+      .filter(function(e) { return !!e })
+  }
+
+  // ---- folders ----
+  //
+  // A folder is a grid item like any app: it has an id, so it takes a place in
+  // the custom order, and it can be dragged. Its members leave the top level
+  // but are still found by search.
+
+  readonly property var folderItems: {
+    var byId = root.entryById
+    return (prefs.folders || []).map(function(f) {
+      var members = (f.apps || []).map(function(id) { return byId[String(id)] })
+        .filter(function(e) { return !!e })
+      return { id: String(f.id), name: String(f.name || "Folder"),
+               isFolder: true, icon: "", members: members }
+    }).filter(function(f) {
+      // A folder that has lost all but one app is no folder at all; its
+      // survivor goes back to the grid.
+      return f.members.length >= 2
+    })
+  }
+
+  // prefs.folders lands a beat after it's assigned, so the grid rebuilds off
+  // the derived list rather than being refreshed by hand at each call site.
+  onFolderItemsChanged: if (root.opened) root.refreshApps()
+
+  property string openFolderId: ""
+
+  readonly property var openFolder: {
+    if (root.openFolderId === "") return null
+    var hit = root.folderItems.filter(function(f) { return f.id === root.openFolderId })
+    return hit.length > 0 ? hit[0] : null
+  }
+
+  function itemName(item) {
+    if (!item) return ""
+    return item.isFolder ? item.name : root.appLibrary ? root.appLibrary.entryName(item) : ""
+  }
+
+  function foldersCopy() { return JSON.parse(JSON.stringify(prefs.folders || [])) }
+
+  // Dropping `src` on `dst`: joins dst's folder, or makes a new one holding
+  // both. The folder inherits dst's place in the grid.
+  function makeFolder(srcIndex, dstIndex) {
+    var src = root.apps[srcIndex], dst = root.apps[dstIndex]
+    if (!src || !dst || src.isFolder) return
+    var folders = root.foldersCopy()
+    var fid
+    if (dst.isFolder) {
+      fid = String(dst.id)
+      for (var i = 0; i < folders.length; i++)
+        if (String(folders[i].id) === fid && folders[i].apps.indexOf(String(src.id)) < 0)
+          folders[i].apps.push(String(src.id))
+    } else {
+      fid = "folder:" + Date.now()
+      folders.push({ id: fid, name: "Folder", apps: [String(dst.id), String(src.id)] })
+    }
+    var layout = root.apps.slice()
+    layout.splice(srcIndex, 1)
+    layout.splice(layout.indexOf(dst), 1, { id: fid })
+    root.commitOrder(layout)
+    prefs.folders = folders
+    root.refreshApps()
+  }
+
+  function renameFolder(fid, name) {
+    var folders = root.foldersCopy()
+    for (var i = 0; i < folders.length; i++)
+      if (String(folders[i].id) === String(fid)) folders[i].name = String(name || "Folder")
+    prefs.folders = folders
+  }
+
+  function ungroupFolder(fid) {
+    prefs.folders = root.foldersCopy().filter(function(f) { return String(f.id) !== String(fid) })
+    if (root.openFolderId === String(fid)) root.openFolderId = ""
+    root.refreshApps()
+  }
+
+  function removeFromFolder(fid, appId) {
+    var folders = root.foldersCopy()
+    for (var i = 0; i < folders.length; i++) {
+      if (String(folders[i].id) !== String(fid)) continue
+      folders[i].apps = folders[i].apps.filter(function(v) { return v !== String(appId) })
+      if (folders[i].apps.length < 2) {
+        folders.splice(i, 1)
+        if (root.openFolderId === String(fid)) root.openFolderId = ""
+      }
+      break
+    }
+    prefs.folders = folders
+    root.refreshApps()
   }
 
   onQueryChanged: {
@@ -301,10 +412,15 @@ Item {
 
   onInteractiveChanged: if (interactive) Qt.callLater(function() { searchInput.forceActiveFocus() })
 
+  onOpenFolderIdChanged: if (root.openFolderId === "") searchInput.forceActiveFocus()
+
   Connections {
     target: root.appLibrary
     ignoreUnknownSignals: true
-    function onAppsChanged() { if (root.opened) root.refreshApps() }
+    function onAppsChanged() {
+      root.libraryEpoch++
+      if (root.opened) root.refreshApps()
+    }
   }
 
   function launch(index) {
@@ -312,6 +428,7 @@ Item {
   }
 
   function launchEntry(entry) {
+    if (entry && entry.isFolder) { root.openFolderId = String(entry.id); return }
     if (!entry || !root.appLibrary) return
     root.appLibrary.launch(entry.id, root.appLibrary.entryName(entry))
     root.requestClose()
@@ -322,11 +439,18 @@ Item {
   property var menuEntry: null
   property point menuPos: Qt.point(0, 0)
   property bool menuArmed: false   // Uninstall asks twice before it bites.
+  property string menuContext: "grid"   // "grid" | "folder"
 
   readonly property var menuItems: {
     var entry = root.menuEntry
     if (!entry) return []
     var id = String(entry.id)
+    if (entry.isFolder)
+      return [{ label: "Open", action: "open" },
+              { label: "Ungroup folder", action: "ungroup" }]
+    if (root.menuContext === "folder")
+      return [{ label: "Remove from folder", action: "unfolder" },
+              { label: "Launch", action: "launch" }]
     var items = [
       { label: root.isFavourite(id) ? "Unpin from favourites" : "Pin to favourites", action: "favourite" },
       { label: root.isHidden(id) ? "Show in launcher" : "Hide from launcher", action: "hide" }
@@ -337,8 +461,9 @@ Item {
     return items
   }
 
-  function openMenu(entry, scenePos) {
+  function openMenu(entry, scenePos, context) {
     root.menuEntry = entry
+    root.menuContext = context || "grid"
     root.menuArmed = false
     root.menuPos = scenePos
   }
@@ -353,6 +478,18 @@ Item {
     if (!entry) return
     var id = String(entry.id)
     switch (action) {
+    case "open":
+      root.openFolderId = id
+      break
+    case "ungroup":
+      root.ungroupFolder(id)
+      break
+    case "unfolder":
+      root.removeFromFolder(root.openFolderId, id)
+      break
+    case "launch":
+      root.launchEntry(entry)
+      return
     case "favourite":
       root.setFavourite(id, !root.isFavourite(id))
       break
@@ -620,11 +757,38 @@ Item {
   property bool dropOnDash: false
   property string dragId: ""
   property string dragIcon: ""
+  property var dragItem: null
   property real dragIconSize: 64
   property point dragPos: Qt.point(0, 0)   // pointer, in window coordinates
   property point dragGrab: Qt.point(0, 0)  // where inside the icon it was grabbed
   property int edgeDir: 0
+  property int folderHover: -1     // slot being dwelled on
+  property int folderTarget: -1    // index that a drop would fold into
   readonly property int dragThreshold: 10
+
+  // Hold a tile over another one to fold them together, GNOME-style.
+  Timer {
+    id: folderDwell
+    interval: 550
+    onTriggered: root.folderTarget = root.folderHover
+  }
+
+  function clearFolderHover() {
+    folderDwell.stop()
+    root.folderHover = -1
+    root.folderTarget = -1
+  }
+
+  // True in the middle of a cell; the bands on either side are for inserting
+  // between tiles instead.
+  function overCellCentre(scene) {
+    var p = viewport.mapFromItem(null, scene.x, scene.y)
+    var x = p.x - root.pageIndent(root.page)
+    if (x < 0 || p.y < 0 || p.y > viewport.height) return false
+    var fx = (x % root.cellWidth) / root.cellWidth
+    var fy = (p.y % root.cellHeight) / root.cellHeight
+    return fx > 0.28 && fx < 0.72 && fy > 0.12 && fy < 0.88
+  }
 
   function pointInItem(item, scene, margin) {
     var p = item.mapFromItem(null, scene.x, scene.y)
@@ -656,6 +820,7 @@ Item {
     root.dragSource = source
     root.dragFrom = index
     root.dragId = String(entry.id)
+    root.dragItem = entry
     root.dashFrom = root.favourites.indexOf(root.dragId)
     root.dragIcon = root.iconSource(entry.icon)
     root.dragIconSize = iconItem.width
@@ -670,7 +835,9 @@ Item {
   function updateDrag(scene) {
     if (!root.dragActive) return
     root.dragPos = scene
-    root.dropOnDash = dash.visible && root.pointInItem(dash, scene, Style.space(14))
+    var dragged = root.dragSource === "grid" ? root.apps[root.dragFrom] : null
+    root.dropOnDash = dash.visible && !(dragged && dragged.isFolder)
+      && root.pointInItem(dash, scene, Style.space(14))
     if (root.dropOnDash) {
       root.dashDropIndex = root.dashIndexAt(dash.mapFromItem(null, scene.x, scene.y).x)
       root.dropIndex = root.dragFrom   // the grid keeps its order while over the dash
@@ -678,7 +845,21 @@ Item {
       return
     }
     if (root.dragSource !== "grid") return
-    root.dropIndex = root.slotAt(scene)
+    var slot = root.slotAt(scene)
+    var dragged = root.apps[root.dragFrom]
+    // Folders don't nest, and nothing folds into itself.
+    if (root.overCellCentre(scene) && slot !== root.dragFrom && dragged && !dragged.isFolder) {
+      if (slot !== root.folderHover) {
+        root.folderHover = slot
+        root.folderTarget = -1
+        folderDwell.restart()
+      }
+    } else {
+      root.clearFolderHover()
+    }
+    // Once a fold is on the cards the grid settles back, so the target tile
+    // under the cursor is the one that lights up.
+    root.dropIndex = root.folderTarget >= 0 ? root.dragFrom : slot
     var p = viewport.mapFromItem(null, scene.x, scene.y)
     var zone = Style.space(52)
     var inRows = p.y > -Style.space(40) && p.y < viewport.height + Style.space(40)
@@ -709,7 +890,9 @@ Item {
 
   function endDrag() {
     if (!root.dragActive) return
-    if (root.dropOnDash) {
+    if (root.folderTarget >= 0 && !root.dropOnDash) {
+      root.makeFolder(root.dragFrom, root.folderTarget)
+    } else if (root.dropOnDash) {
       root.setFavouriteAt(root.dragId, root.dashDropIndex)
     } else if (root.dragSource === "dash") {
       // Dragged off the dash: that's an unpin.
@@ -725,6 +908,7 @@ Item {
 
   function cancelDrag() {
     root.setEdgeDir(0)
+    root.clearFolderHover()
     root.dragActive = false
     root.dragSource = ""
     root.dragFrom = -1
@@ -734,6 +918,7 @@ Item {
     root.dropOnDash = false
     root.dragId = ""
     root.dragIcon = ""
+    root.dragItem = null
   }
 
   // ---- wallpaper ----
@@ -846,6 +1031,7 @@ Item {
             switch (event.key) {
             case Qt.Key_Escape:
               if (root.menuEntry) root.closeMenu()
+              else if (root.openFolderId !== "") root.openFolderId = ""
               else if (root.query.length > 0) root.query = ""
               else root.requestClose()
               break
@@ -1054,19 +1240,168 @@ Item {
 
     // The tile under the cursor while dragging. Lives at window level so it
     // can be carried out of the clipped grid and over the dash.
-    Image {
+    Item {
       id: dragGhost
-      visible: root.dragActive && root.dragIcon !== ""
-      source: root.dragIcon
+      visible: root.dragActive && !!root.dragItem
       width: root.dragIconSize
       height: root.dragIconSize
       x: root.dragPos.x - root.dragGrab.x
       y: root.dragPos.y - root.dragGrab.y
-      fillMode: Image.PreserveAspectFit
-      sourceSize.width: width * Screen.devicePixelRatio
-      sourceSize.height: height * Screen.devicePixelRatio
       scale: 1.12
       opacity: 0.95
+
+      Image {
+        anchors.fill: parent
+        visible: !!root.dragItem && !root.dragItem.isFolder
+        source: root.dragIcon
+        fillMode: Image.PreserveAspectFit
+        sourceSize.width: width * Screen.devicePixelRatio
+        sourceSize.height: height * Screen.devicePixelRatio
+      }
+
+      Rectangle {
+        anchors.fill: parent
+        visible: !!root.dragItem && !!root.dragItem.isFolder
+        radius: Style.space(16)
+        color: Util.alpha(Color.foreground, 0.2)
+
+        Grid {
+          anchors.centerIn: parent
+          columns: 2
+          spacing: Style.space(3)
+
+          Repeater {
+            model: root.dragItem && root.dragItem.isFolder ? root.dragItem.members.slice(0, 4) : []
+
+            Image {
+              required property var modelData
+              width: Math.round(root.dragIconSize * 0.34)
+              height: width
+              fillMode: Image.PreserveAspectFit
+              sourceSize.width: width * Screen.devicePixelRatio
+              sourceSize.height: height * Screen.devicePixelRatio
+              source: root.iconSource(modelData.icon)
+            }
+          }
+        }
+      }
+    }
+
+    // Open folder. Its own little grid over the main one.
+    Item {
+      anchors.fill: parent
+      visible: !!root.openFolder
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: root.openFolderId = ""
+      }
+
+      Rectangle {
+        id: folderPanel
+        readonly property int cols: root.openFolder
+          ? Math.max(1, Math.min(4, root.openFolder.members.length)) : 1
+        anchors.centerIn: parent
+        width: folderPanel.cols * root.cellWidth + Style.space(36)
+        height: folderName.height + folderGrid.height + Style.space(52)
+        radius: Style.space(26)
+        color: Util.alpha(Color.background, 0.97)
+        border.width: 1
+        border.color: Util.alpha(Color.foreground, 0.15)
+
+        // Clicks inside the folder must not reach the catcher behind it.
+        MouseArea { anchors.fill: parent }
+
+        TextInput {
+          id: folderName
+          y: Style.space(20)
+          width: parent.width - Style.space(48)
+          anchors.horizontalCenter: parent.horizontalCenter
+          horizontalAlignment: TextInput.AlignHCenter
+          color: Color.foreground
+          selectionColor: Util.alpha(Color.accent, 0.4)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.heading
+          selectByMouse: true
+          text: root.openFolder ? root.openFolder.name : ""
+          // Typing into it breaks the binding, so put it back each time a
+          // folder opens.
+          onVisibleChanged: if (visible) text = Qt.binding(function() {
+            return root.openFolder ? root.openFolder.name : ""
+          })
+          onEditingFinished: if (root.openFolder) root.renameFolder(root.openFolder.id, text)
+          Keys.onReturnPressed: focus = false
+        }
+
+        Grid {
+          id: folderGrid
+          anchors.horizontalCenter: parent.horizontalCenter
+          y: folderName.y + folderName.height + Style.space(16)
+          columns: folderPanel.cols
+
+          Repeater {
+            model: root.openFolder ? root.openFolder.members : []
+
+            Item {
+              id: member
+              required property var modelData
+              width: root.cellWidth
+              height: root.cellHeight
+
+              Rectangle {
+                anchors.fill: parent
+                anchors.margins: Style.space(6)
+                radius: Style.space(18)
+                color: memberHover.containsMouse ? Util.alpha(Color.foreground, 0.1) : "transparent"
+                Behavior on color { ColorAnimation { duration: 120 } }
+              }
+
+              Image {
+                id: memberIcon
+                width: root.iconSize
+                height: root.iconSize
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: Style.space(14)
+                fillMode: Image.PreserveAspectFit
+                sourceSize.width: width * Screen.devicePixelRatio
+                sourceSize.height: height * Screen.devicePixelRatio
+                source: root.iconSource(member.modelData.icon)
+                asynchronous: true
+                scale: memberHover.pressed ? 0.92 : 1
+                Behavior on scale { NumberAnimation { duration: 90 } }
+              }
+
+              Text {
+                anchors.top: memberIcon.bottom
+                anchors.topMargin: Style.space(8)
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Style.space(16)
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+                maximumLineCount: 1
+                text: root.itemName(member.modelData)
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              MouseArea {
+                id: memberHover
+                anchors.fill: parent
+                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onClicked: function(mouse) {
+                  if (mouse.button === Qt.RightButton)
+                    root.openMenu(member.modelData,
+                                  member.mapToItem(null, mouse.x, mouse.y), "folder")
+                  else
+                    root.launchEntry(member.modelData)
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     // Right-click menu. Outside `content` so it is not scaled by the open
@@ -1139,6 +1474,8 @@ Item {
     property var entry: null
     property int globalIndex: -1
     readonly property int slot: root.slotFor(tile.globalIndex)
+    readonly property bool isFolder: !!(tile.entry && tile.entry.isFolder)
+    readonly property bool foldTarget: root.dragActive && root.folderTarget === tile.globalIndex
     readonly property bool dragged: root.dragActive && root.dragSource === "grid"
       && tile.globalIndex === root.dragFrom
     readonly property bool selected: root.selectedIndex === globalIndex
@@ -1166,30 +1503,76 @@ Item {
       Behavior on color { ColorAnimation { duration: 120 } }
     }
 
-    Image {
-      id: icon
+    Item {
+      id: art
       width: root.iconSize
       height: root.iconSize
       anchors.horizontalCenter: parent.horizontalCenter
       y: Style.space(14)
-      fillMode: Image.PreserveAspectFit
-      sourceSize.width: width * Screen.devicePixelRatio
-      sourceSize.height: height * Screen.devicePixelRatio
-      source: tile.entry ? root.iconSource(tile.entry.icon) : ""
-      asynchronous: true
-      scale: hover.pressed ? 0.92 : 1
-      Behavior on scale { NumberAnimation { duration: 90 } }
+      scale: (hover.pressed ? 0.92 : 1) * (tile.foldTarget ? 1.12 : 1)
+      Behavior on scale { NumberAnimation { duration: 120 } }
+
+      Image {
+        anchors.fill: parent
+        visible: !tile.isFolder
+        fillMode: Image.PreserveAspectFit
+        sourceSize.width: width * Screen.devicePixelRatio
+        sourceSize.height: height * Screen.devicePixelRatio
+        source: tile.entry && !tile.isFolder ? root.iconSource(tile.entry.icon) : ""
+        asynchronous: true
+      }
+
+      // A folder shows the first four of its apps, as GNOME does.
+      Rectangle {
+        anchors.fill: parent
+        visible: tile.isFolder
+        radius: Style.space(16)
+        color: Util.alpha(Color.foreground, 0.16)
+        border.width: 1
+        border.color: Util.alpha(Color.foreground, 0.12)
+
+        Grid {
+          anchors.centerIn: parent
+          columns: 2
+          spacing: Style.space(3)
+
+          Repeater {
+            model: tile.isFolder ? tile.entry.members.slice(0, 4) : []
+
+            Image {
+              required property var modelData
+              width: Math.round(root.iconSize * 0.34)
+              height: width
+              fillMode: Image.PreserveAspectFit
+              sourceSize.width: width * Screen.devicePixelRatio
+              sourceSize.height: height * Screen.devicePixelRatio
+              source: root.iconSource(modelData.icon)
+              asynchronous: true
+            }
+          }
+        }
+      }
+
+      Rectangle {
+        anchors.fill: parent
+        anchors.margins: -Style.space(5)
+        visible: tile.foldTarget
+        radius: Style.space(20)
+        color: "transparent"
+        border.width: 2
+        border.color: Util.alpha(Color.accent, 0.9)
+      }
     }
 
     Text {
-      anchors.top: icon.bottom
+      anchors.top: art.bottom
       anchors.topMargin: Style.space(8)
       anchors.horizontalCenter: parent.horizontalCenter
       width: parent.width - Style.space(16)
       horizontalAlignment: Text.AlignHCenter
       elide: Text.ElideRight
       maximumLineCount: 1
-      text: tile.entry && root.appLibrary ? root.appLibrary.entryName(tile.entry) : ""
+      text: root.itemName(tile.entry)
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.body
@@ -1219,7 +1602,7 @@ Item {
           var dy = scene.y - hover.pressScene.y
           if (dx * dx + dy * dy < root.dragThreshold * root.dragThreshold) return
           hover.moved = true
-          root.beginDrag("grid", tile.globalIndex, tile.entry, icon, hover.pressScene)
+          root.beginDrag("grid", tile.globalIndex, tile.entry, art, hover.pressScene)
         }
         root.updateDrag(scene)
       }
