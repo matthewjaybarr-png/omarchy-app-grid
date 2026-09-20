@@ -133,6 +133,11 @@ Item {
       menu: root.menuEntry ? String(root.menuEntry.id) : null,
       menuArmed: root.menuArmed,
       searchFocus: searchInput.activeFocus,
+      drag: root.dragActive
+        ? { source: root.dragSource, id: root.dragId, from: root.dragFrom,
+            drop: root.dropIndex, dash: root.dropOnDash ? root.dashDropIndex : -1 }
+        : null,
+      order: root.order.length,
       // Last scroll event seen, for working out whether two-finger paging is
       // reaching the surface at all.
       wheel: root.lastWheel
@@ -193,8 +198,10 @@ Item {
     var entries = rows.map(function(row) { return row.entry })
     // Hidden apps drop out of the grid but still turn up in search, dimmed, so
     // there is always a way back to the menu that unhides them.
-    if (root.query.length === 0)
+    if (root.query.length === 0) {
       entries = entries.filter(function(entry) { return !root.isHidden(entry.id) })
+      entries = root.orderedEntries(entries)
+    }
     root.apps = entries
     if (root.page >= root.pageCount) root.page = Math.max(0, root.pageCount - 1)
   }
@@ -219,10 +226,42 @@ Item {
 
   function setFavourite(id, on) { prefs.favourites = root.withItem(root.favourites, id, on) }
 
+  function setFavouriteAt(id, index) {
+    var next = (root.favourites || []).filter(function(v) { return v !== String(id) })
+    next.splice(Math.max(0, Math.min(next.length, index)), 0, String(id))
+    prefs.favourites = next
+  }
+
   function setHidden(id, on) {
     prefs.hidden = root.withItem(root.hidden, id, on)
     if (on) prefs.favourites = root.withItem(root.favourites, id, false)
     root.refreshApps()
+  }
+
+  // Custom grid order. Apps the user has never moved keep the library's own
+  // ranking and land after the arranged ones, which is where a newly
+  // installed app belongs anyway.
+  readonly property var order: prefs.order || []
+
+  function orderedEntries(entries) {
+    var rank = ({})
+    for (var i = 0; i < root.order.length; i++) rank[String(root.order[i])] = i
+    var placed = [], rest = []
+    for (var j = 0; j < entries.length; j++) {
+      if (rank[String(entries[j].id)] === undefined) rest.push(entries[j])
+      else placed.push(entries[j])
+    }
+    placed.sort(function(a, b) { return rank[String(a.id)] - rank[String(b.id)] })
+    return placed.concat(rest)
+  }
+
+  function commitOrder(entries) {
+    var ids = entries.map(function(e) { return String(e.id) })
+    var seen = ({})
+    for (var i = 0; i < ids.length; i++) seen[ids[i]] = true
+    // Ids we can't see right now (hidden apps, an app installed on another
+    // machine) keep their place in the list rather than being forgotten.
+    prefs.order = ids.concat(root.order.filter(function(id) { return !seen[id] }))
   }
 
   FileView {
@@ -239,6 +278,7 @@ Item {
       id: prefs
       property var favourites: []
       property var hidden: []
+      property var order: []
     }
   }
 
@@ -446,6 +486,13 @@ Item {
   readonly property int columns: Math.max(4, Math.min(8, Math.floor(root.screenWidth * 0.84 / cellWidth)))
   readonly property int rows: Math.max(2, Math.min(5, Math.floor((root.screenHeight - Style.space(240)) / cellHeight)))
   readonly property int perPage: columns * rows
+  readonly property int dashItemSize: Math.round(root.iconSize * 0.72)
+  readonly property int dashCell: root.dashItemSize + Style.space(14)
+  readonly property int dashSpacing: Style.space(6)
+  readonly property int dashStep: root.dashCell + root.dashSpacing
+  // An app that isn't pinned yet opens a gap in the dash while it hovers there.
+  readonly property int dashSlots: root.favouriteEntries.length
+    + (root.dragActive && root.dropOnDash && root.dashFrom < 0 ? 1 : 0)
   readonly property int pageCount: Math.max(1, Math.ceil(apps.length / perPage))
 
   function select(index) {
@@ -517,6 +564,176 @@ Item {
     var atStart = root.page === 0 && offset > 0
     var atEnd = root.page === root.pageCount - 1 && offset < 0
     return atStart || atEnd ? offset * 0.3 : offset
+  }
+
+  // ---- slot geometry ----
+  //
+  // Tiles are positioned by hand rather than by a Grid per page: one delegate
+  // per app, laid out at `slot` across all pages, so a drag can renumber the
+  // slots and every other tile animates into its new place.
+
+  function itemsOnPage(page) {
+    return Math.max(0, Math.min(root.perPage, root.apps.length - page * root.perPage))
+  }
+
+  // A short row (the last page, or a handful of search results) sits centred.
+  function pageIndent(page) {
+    var n = root.itemsOnPage(page)
+    return n > 0 && n < root.columns ? Math.round((viewport.width - n * root.cellWidth) / 2) : 0
+  }
+
+  function slotX(slot) {
+    var page = Math.floor(slot / root.perPage)
+    return page * viewport.width + root.pageIndent(page) + (slot % root.columns) * root.cellWidth
+  }
+
+  function slotY(slot) {
+    return Math.floor((slot % root.perPage) / root.columns) * root.cellHeight
+  }
+
+  // Where `index` sits once `from` has been pulled out and dropped at `to`.
+  function reindex(index, from, to) {
+    if (index === from) return to
+    var shifted = index < from ? index : index - 1
+    return shifted < to ? shifted : shifted + 1
+  }
+
+  function slotFor(index) {
+    if (!root.dragActive || root.dragSource !== "grid" || root.dropIndex < 0) return index
+    return root.reindex(index, root.dragFrom, root.dropIndex)
+  }
+
+  function dashSlotFor(index) {
+    if (!root.dragActive || !root.dropOnDash) return index
+    if (root.dashFrom >= 0) return root.reindex(index, root.dashFrom, root.dashDropIndex)
+    return index < root.dashDropIndex ? index : index + 1
+  }
+
+  // ---- drag to reorder ----
+
+  property bool dragActive: false
+  property string dragSource: ""    // "grid" | "dash"
+  property int dragFrom: -1         // index into apps (grid) or favouriteEntries (dash)
+  property int dashFrom: -1         // the dragged app's current place in the dash, -1 if unpinned
+  property int dropIndex: -1
+  property int dashDropIndex: -1
+  property bool dropOnDash: false
+  property string dragId: ""
+  property string dragIcon: ""
+  property real dragIconSize: 64
+  property point dragPos: Qt.point(0, 0)   // pointer, in window coordinates
+  property point dragGrab: Qt.point(0, 0)  // where inside the icon it was grabbed
+  property int edgeDir: 0
+  readonly property int dragThreshold: 10
+
+  function pointInItem(item, scene, margin) {
+    var p = item.mapFromItem(null, scene.x, scene.y)
+    return p.x >= -margin && p.y >= -margin
+      && p.x <= item.width + margin && p.y <= item.height + margin
+  }
+
+  function slotAt(scene) {
+    // Measured against the viewport, which never moves: the grid layer is
+    // still sliding right after an edge flip, so its x would be stale.
+    var p = viewport.mapFromItem(null, scene.x, scene.y)
+    var page = root.page
+    var col = Math.floor((p.x - root.pageIndent(page)) / root.cellWidth)
+    var row = Math.floor(p.y / root.cellHeight)
+    col = Math.max(0, Math.min(root.columns - 1, col))
+    row = Math.max(0, Math.min(root.rows - 1, row))
+    var slot = page * root.perPage + row * root.columns + col
+    return Math.max(0, Math.min(root.apps.length - 1, slot))
+  }
+
+  function dashIndexAt(dashX) {
+    var i = Math.round((dashX - dashRow.x) / root.dashStep)
+    return Math.max(0, Math.min(root.favouriteEntries.length, i))
+  }
+
+  function beginDrag(source, index, entry, iconItem, scene) {
+    if (!entry) return
+    var origin = iconItem.mapToItem(null, 0, 0)
+    root.dragSource = source
+    root.dragFrom = index
+    root.dragId = String(entry.id)
+    root.dashFrom = root.favourites.indexOf(root.dragId)
+    root.dragIcon = root.iconSource(entry.icon)
+    root.dragIconSize = iconItem.width
+    root.dragGrab = Qt.point(scene.x - origin.x, scene.y - origin.y)
+    root.dropIndex = source === "grid" ? index : -1
+    root.dashDropIndex = Math.max(0, root.dashFrom)
+    root.dragActive = true
+    root.closeMenu()
+    root.updateDrag(scene)
+  }
+
+  function updateDrag(scene) {
+    if (!root.dragActive) return
+    root.dragPos = scene
+    root.dropOnDash = dash.visible && root.pointInItem(dash, scene, Style.space(14))
+    if (root.dropOnDash) {
+      root.dashDropIndex = root.dashIndexAt(dash.mapFromItem(null, scene.x, scene.y).x)
+      root.dropIndex = root.dragFrom   // the grid keeps its order while over the dash
+      root.setEdgeDir(0)
+      return
+    }
+    if (root.dragSource !== "grid") return
+    root.dropIndex = root.slotAt(scene)
+    var p = viewport.mapFromItem(null, scene.x, scene.y)
+    var zone = Style.space(52)
+    var inRows = p.y > -Style.space(40) && p.y < viewport.height + Style.space(40)
+    root.setEdgeDir(!inRows ? 0
+      : p.x < zone && root.page > 0 ? -1
+      : p.x > viewport.width - zone && root.page < root.pageCount - 1 ? 1 : 0)
+  }
+
+  function setEdgeDir(dir) {
+    if (dir === root.edgeDir) return
+    root.edgeDir = dir
+    if (dir === 0) edgeFlip.stop()
+    else edgeFlip.restart()
+  }
+
+  // Hold a dragged tile against the edge to turn the page, GNOME-style.
+  Timer {
+    id: edgeFlip
+    interval: 500
+    repeat: true
+    onTriggered: {
+      var next = root.page + root.edgeDir
+      if (root.edgeDir === 0 || next < 0 || next >= root.pageCount) { root.setEdgeDir(0); return }
+      root.goToPage(next)
+      root.dropIndex = root.slotAt(root.dragPos)
+    }
+  }
+
+  function endDrag() {
+    if (!root.dragActive) return
+    if (root.dropOnDash) {
+      root.setFavouriteAt(root.dragId, root.dashDropIndex)
+    } else if (root.dragSource === "dash") {
+      // Dragged off the dash: that's an unpin.
+      root.setFavourite(root.dragId, false)
+    } else if (root.dropIndex >= 0 && root.dropIndex !== root.dragFrom) {
+      var next = root.apps.slice()
+      next.splice(root.dropIndex, 0, next.splice(root.dragFrom, 1)[0])
+      root.commitOrder(next)
+      root.apps = next
+    }
+    root.cancelDrag()
+  }
+
+  function cancelDrag() {
+    root.setEdgeDir(0)
+    root.dragActive = false
+    root.dragSource = ""
+    root.dragFrom = -1
+    root.dashFrom = -1
+    root.dropIndex = -1
+    root.dashDropIndex = -1
+    root.dropOnDash = false
+    root.dragId = ""
+    root.dragIcon = ""
   }
 
   // ---- wallpaper ----
@@ -660,39 +877,26 @@ Item {
         y: searchPill.y + searchPill.height + Style.space(36)
         clip: true
 
-        Row {
+        Item {
+          id: gridLayer
+          width: viewport.width
+          height: viewport.height
           x: -root.page * viewport.width + root.resisted(root.dragOffset)
           Behavior on x {
             enabled: !root.pageDragging
             NumberAnimation { duration: 320; easing.type: Easing.OutCubic }
           }
 
+          // One delegate per app across every page; each places itself from
+          // its slot, so a drag just renumbers slots and the rest slide over.
           Repeater {
-            model: root.pageCount
+            model: root.apps
 
-            Item {
-              id: pageGrid
+            AppTile {
+              required property var modelData
               required property int index
-              readonly property int count: Math.max(0, Math.min(root.perPage, root.apps.length - index * root.perPage))
-              width: viewport.width
-              height: viewport.height
-
-              // A short single row (typical of search results) sits centred, as in GNOME.
-              Grid {
-                x: pageGrid.count < root.columns ? Math.round((viewport.width - pageGrid.count * root.cellWidth) / 2) : 0
-                columns: root.columns
-
-                Repeater {
-                  model: root.apps.slice(pageGrid.index * root.perPage, (pageGrid.index + 1) * root.perPage)
-
-                  AppTile {
-                    required property var modelData
-                    required property int index
-                    entry: modelData
-                    globalIndex: pageGrid.index * root.perPage + index
-                  }
-                }
-              }
+              entry: modelData
+              globalIndex: index
             }
           }
         }
@@ -746,23 +950,27 @@ Item {
         }
       }
 
-      // Favourites row (GNOME's dash), hidden while searching.
+      // Favourites row (GNOME's dash). Hidden while searching, but always
+      // shown during a drag so there's somewhere to drop an app to pin it.
       Rectangle {
         id: dash
-        visible: root.favouriteEntries.length > 0 && root.query.length === 0
-        width: dashRow.width + Style.space(16)
-        height: dashRow.height + Style.space(16)
+        visible: root.query.length === 0
+          && (root.favouriteEntries.length > 0 || root.dragActive)
+        width: Math.max(root.dashStep, dashRow.width) + Style.space(16)
+        height: root.dashCell + Style.space(16)
         radius: Style.space(22)
-        color: Util.alpha(Color.background, 0.55)
+        color: Util.alpha(Color.background, root.dropOnDash ? 0.75 : 0.55)
         border.width: 1
-        border.color: Util.alpha(Color.foreground, 0.12)
+        border.color: Util.alpha(Color.foreground, root.dropOnDash ? 0.35 : 0.12)
+        Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
         anchors.horizontalCenter: parent.horizontalCenter
         y: root.screenHeight - height - Style.space(28)
 
-        Row {
+        Item {
           id: dashRow
           anchors.centerIn: parent
-          spacing: Style.space(6)
+          width: Math.max(0, root.dashSlots * root.dashStep - root.dashSpacing)
+          height: root.dashCell
 
           Repeater {
             model: root.favouriteEntries
@@ -770,9 +978,14 @@ Item {
             Item {
               id: favourite
               required property var modelData
-              readonly property int size: Math.round(root.iconSize * 0.72)
-              width: size + Style.space(14)
-              height: size + Style.space(14)
+              required property int index
+              readonly property bool dragged: root.dragActive
+                && root.dragSource === "dash" && favourite.index === root.dragFrom
+              width: root.dashCell
+              height: root.dashCell
+              x: root.dashSlotFor(favourite.index) * root.dashStep
+              opacity: favourite.dragged ? 0 : 1
+              Behavior on x { enabled: root.dragActive; NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
               Rectangle {
                 anchors.fill: parent
@@ -782,9 +995,10 @@ Item {
               }
 
               Image {
+                id: favIcon
                 anchors.centerIn: parent
-                width: favourite.size
-                height: favourite.size
+                width: root.dashItemSize
+                height: root.dashItemSize
                 fillMode: Image.PreserveAspectFit
                 sourceSize.width: width * Screen.devicePixelRatio
                 sourceSize.height: height * Screen.devicePixelRatio
@@ -799,7 +1013,33 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
+                property point pressScene
+                property bool candidate: false
+                property bool moved: false
+
+                onPressed: function(mouse) {
+                  favHover.moved = false
+                  favHover.candidate = mouse.button === Qt.LeftButton
+                  favHover.pressScene = favourite.mapToItem(null, mouse.x, mouse.y)
+                }
+                onPositionChanged: function(mouse) {
+                  if (!favHover.pressed) return
+                  var scene = favourite.mapToItem(null, mouse.x, mouse.y)
+                  if (!root.dragActive) {
+                    if (!favHover.candidate) return
+                    var dx = scene.x - favHover.pressScene.x
+                    var dy = scene.y - favHover.pressScene.y
+                    if (dx * dx + dy * dy < root.dragThreshold * root.dragThreshold) return
+                    favHover.moved = true
+                    root.beginDrag("dash", favourite.index, favourite.modelData,
+                                   favIcon, favHover.pressScene)
+                  }
+                  root.updateDrag(scene)
+                }
+                onReleased: if (root.dragActive) root.endDrag()
+                onCanceled: root.cancelDrag()
                 onClicked: function(mouse) {
+                  if (favHover.moved) return
                   if (mouse.button === Qt.RightButton)
                     root.openMenu(favourite.modelData, favourite.mapToItem(null, mouse.x, mouse.y))
                   else
@@ -810,6 +1050,23 @@ Item {
           }
         }
       }
+    }
+
+    // The tile under the cursor while dragging. Lives at window level so it
+    // can be carried out of the clipped grid and over the dash.
+    Image {
+      id: dragGhost
+      visible: root.dragActive && root.dragIcon !== ""
+      source: root.dragIcon
+      width: root.dragIconSize
+      height: root.dragIconSize
+      x: root.dragPos.x - root.dragGrab.x
+      y: root.dragPos.y - root.dragGrab.y
+      fillMode: Image.PreserveAspectFit
+      sourceSize.width: width * Screen.devicePixelRatio
+      sourceSize.height: height * Screen.devicePixelRatio
+      scale: 1.12
+      opacity: 0.95
     }
 
     // Right-click menu. Outside `content` so it is not scaled by the open
@@ -881,13 +1138,24 @@ Item {
     id: tile
     property var entry: null
     property int globalIndex: -1
+    readonly property int slot: root.slotFor(tile.globalIndex)
+    readonly property bool dragged: root.dragActive && root.dragSource === "grid"
+      && tile.globalIndex === root.dragFrom
     readonly property bool selected: root.selectedIndex === globalIndex
     // Hidden apps only ever appear here via search; dimmed, to say why they
     // are not in the grid.
     readonly property bool dimmed: tile.entry ? root.isHidden(tile.entry.id) : false
     width: root.cellWidth
     height: root.cellHeight
-    opacity: tile.dimmed ? 0.45 : 1
+    x: root.slotX(tile.slot)
+    y: root.slotY(tile.slot)
+    // Only animate while a drag is renumbering slots; page changes and search
+    // results should land instantly.
+    Behavior on x { enabled: root.dragActive; NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+    Behavior on y { enabled: root.dragActive; NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+    // Hidden by opacity, not `visible`: an invisible item loses Qt's mouse
+    // grab, which cancels the very drag that hid it.
+    opacity: tile.dragged ? 0 : tile.dimmed ? 0.45 : 1
 
     Rectangle {
       anchors.fill: parent
@@ -932,7 +1200,34 @@ Item {
       anchors.fill: parent
       hoverEnabled: true
       acceptedButtons: Qt.LeftButton | Qt.RightButton
+      property point pressScene
+      property bool candidate: false
+      property bool moved: false
+
+      onPressed: function(mouse) {
+        hover.moved = false
+        // Reordering only makes sense on the arranged grid, not on search hits.
+        hover.candidate = mouse.button === Qt.LeftButton && root.query.length === 0
+        hover.pressScene = tile.mapToItem(null, mouse.x, mouse.y)
+      }
+      onPositionChanged: function(mouse) {
+        if (!hover.pressed) return
+        var scene = tile.mapToItem(null, mouse.x, mouse.y)
+        if (!root.dragActive) {
+          if (!hover.candidate) return
+          var dx = scene.x - hover.pressScene.x
+          var dy = scene.y - hover.pressScene.y
+          if (dx * dx + dy * dy < root.dragThreshold * root.dragThreshold) return
+          hover.moved = true
+          root.beginDrag("grid", tile.globalIndex, tile.entry, icon, hover.pressScene)
+        }
+        root.updateDrag(scene)
+      }
+      onReleased: if (root.dragActive) root.endDrag()
+      onCanceled: root.cancelDrag()
+      // A release that ended a drag still emits clicked; don't launch on it.
       onClicked: function(mouse) {
+        if (hover.moved) return
         if (mouse.button === Qt.RightButton)
           root.openMenu(tile.entry, tile.mapToItem(null, mouse.x, mouse.y))
         else
