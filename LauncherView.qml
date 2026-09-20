@@ -130,6 +130,9 @@ Item {
       opened: root.opened, progress: root.progress, page: root.page,
       columns: root.columns, rows: root.rows, screen: [root.screenWidth, root.screenHeight],
       pngIndex: Object.keys(root.pngIndex).length,
+      menu: root.menuEntry ? String(root.menuEntry.id) : null,
+      menuArmed: root.menuArmed,
+      searchFocus: searchInput.activeFocus,
       // Last scroll event seen, for working out whether two-finger paging is
       // reaching the surface at all.
       wheel: root.lastWheel
@@ -187,8 +190,65 @@ Item {
   function refreshApps() {
     // sortedEntries() returns ranked rows ({entry, score, key, name}).
     var rows = root.appLibrary ? root.appLibrary.sortedEntries(root.query) : []
-    root.apps = rows.map(function(row) { return row.entry })
+    var entries = rows.map(function(row) { return row.entry })
+    // Hidden apps drop out of the grid but still turn up in search, dimmed, so
+    // there is always a way back to the menu that unhides them.
+    if (root.query.length === 0)
+      entries = entries.filter(function(entry) { return !root.isHidden(entry.id) })
+    root.apps = entries
     if (root.page >= root.pageCount) root.page = Math.max(0, root.pageCount - 1)
+  }
+
+  // ---- pinned and hidden apps ----
+  //
+  // Omarchy has no per-user hide list (its launcher.hides lives in /usr/share,
+  // and appLibrary.remove() is the *uninstaller*), so both lists are ours and
+  // affect nothing outside this launcher.
+
+  readonly property var favourites: prefs.favourites || []
+  readonly property var hidden: prefs.hidden || []
+
+  function isFavourite(id) { return root.favourites.indexOf(String(id)) >= 0 }
+  function isHidden(id) { return root.hidden.indexOf(String(id)) >= 0 }
+
+  function withItem(list, id, present) {
+    var next = (list || []).filter(function(v) { return v !== String(id) })
+    if (present) next.push(String(id))
+    return next
+  }
+
+  function setFavourite(id, on) { prefs.favourites = root.withItem(root.favourites, id, on) }
+
+  function setHidden(id, on) {
+    prefs.hidden = root.withItem(root.hidden, id, on)
+    if (on) prefs.favourites = root.withItem(root.favourites, id, false)
+    root.refreshApps()
+  }
+
+  FileView {
+    id: prefsFile
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/matt-launcher.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onAdapterUpdated: writeAdapter()
+    // No file yet on first run; the adapter defaults stand in until a pin.
+    onLoadFailed: function(error) { if (error === FileViewError.FileNotFound) writeAdapter() }
+
+    JsonAdapter {
+      id: prefs
+      property var favourites: []
+      property var hidden: []
+    }
+  }
+
+  // Entries for the favourites row, in pinned order, skipping ids that no
+  // longer resolve to an installed app.
+  readonly property var favouriteEntries: {
+    var all = root.appLibrary ? root.appLibrary.sortedEntries("") : []
+    var byId = ({})
+    for (var i = 0; i < all.length; i++) byId[String(all[i].entry.id)] = all[i].entry
+    return root.favourites.map(function(id) { return byId[id] }).filter(function(e) { return !!e })
   }
 
   onQueryChanged: {
@@ -208,10 +268,68 @@ Item {
   }
 
   function launch(index) {
-    var entry = root.apps[index]
+    root.launchEntry(root.apps[index])
+  }
+
+  function launchEntry(entry) {
     if (!entry || !root.appLibrary) return
     root.appLibrary.launch(entry.id, root.appLibrary.entryName(entry))
     root.requestClose()
+  }
+
+  // ---- right-click menu ----
+
+  property var menuEntry: null
+  property point menuPos: Qt.point(0, 0)
+  property bool menuArmed: false   // Uninstall asks twice before it bites.
+
+  readonly property var menuItems: {
+    var entry = root.menuEntry
+    if (!entry) return []
+    var id = String(entry.id)
+    var items = [
+      { label: root.isFavourite(id) ? "Unpin from favourites" : "Pin to favourites", action: "favourite" },
+      { label: root.isHidden(id) ? "Show in launcher" : "Hide from launcher", action: "hide" }
+    ]
+    items.push(root.menuArmed
+      ? { label: "Really uninstall?", action: "uninstall", danger: true }
+      : { label: "Uninstall…", action: "arm", danger: true })
+    return items
+  }
+
+  function openMenu(entry, scenePos) {
+    root.menuEntry = entry
+    root.menuArmed = false
+    root.menuPos = scenePos
+  }
+
+  function closeMenu() {
+    root.menuEntry = null
+    root.menuArmed = false
+  }
+
+  function runMenuAction(action) {
+    var entry = root.menuEntry
+    if (!entry) return
+    var id = String(entry.id)
+    switch (action) {
+    case "favourite":
+      root.setFavourite(id, !root.isFavourite(id))
+      break
+    case "hide":
+      root.setHidden(id, !root.isHidden(id))
+      break
+    case "arm":
+      // Omarchy's remover deletes the desktop file, or runs pacman -Rns /
+      // flatpak uninstall in a terminal. Worth a second click.
+      root.menuArmed = true
+      return
+    case "uninstall":
+      if (root.appLibrary) root.appLibrary.remove(id, root.appLibrary.entryName(entry))
+      root.requestClose()
+      break
+    }
+    root.closeMenu()
   }
 
   // ---- open/close animation ----
@@ -510,7 +628,8 @@ Item {
           Keys.onPressed: function(event) {
             switch (event.key) {
             case Qt.Key_Escape:
-              if (root.query.length > 0) root.query = ""
+              if (root.menuEntry) root.closeMenu()
+              else if (root.query.length > 0) root.query = ""
               else root.requestClose()
               break
             case Qt.Key_Return:
@@ -626,6 +745,135 @@ Item {
           }
         }
       }
+
+      // Favourites row (GNOME's dash), hidden while searching.
+      Rectangle {
+        id: dash
+        visible: root.favouriteEntries.length > 0 && root.query.length === 0
+        width: dashRow.width + Style.space(16)
+        height: dashRow.height + Style.space(16)
+        radius: Style.space(22)
+        color: Util.alpha(Color.background, 0.55)
+        border.width: 1
+        border.color: Util.alpha(Color.foreground, 0.12)
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: root.screenHeight - height - Style.space(28)
+
+        Row {
+          id: dashRow
+          anchors.centerIn: parent
+          spacing: Style.space(6)
+
+          Repeater {
+            model: root.favouriteEntries
+
+            Item {
+              id: favourite
+              required property var modelData
+              readonly property int size: Math.round(root.iconSize * 0.72)
+              width: size + Style.space(14)
+              height: size + Style.space(14)
+
+              Rectangle {
+                anchors.fill: parent
+                radius: Style.space(14)
+                color: favHover.containsMouse ? Util.alpha(Color.foreground, 0.12) : "transparent"
+                Behavior on color { ColorAnimation { duration: 120 } }
+              }
+
+              Image {
+                anchors.centerIn: parent
+                width: favourite.size
+                height: favourite.size
+                fillMode: Image.PreserveAspectFit
+                sourceSize.width: width * Screen.devicePixelRatio
+                sourceSize.height: height * Screen.devicePixelRatio
+                source: root.iconSource(favourite.modelData.icon)
+                asynchronous: true
+                scale: favHover.pressed ? 0.92 : 1
+                Behavior on scale { NumberAnimation { duration: 90 } }
+              }
+
+              MouseArea {
+                id: favHover
+                anchors.fill: parent
+                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onClicked: function(mouse) {
+                  if (mouse.button === Qt.RightButton)
+                    root.openMenu(favourite.modelData, favourite.mapToItem(null, mouse.x, mouse.y))
+                  else
+                    root.launchEntry(favourite.modelData)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Right-click menu. Outside `content` so it is not scaled by the open
+    // animation, and above it so its catcher takes the next click.
+    Item {
+      anchors.fill: parent
+      visible: !!root.menuEntry
+
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: root.closeMenu()
+      }
+
+      Rectangle {
+        id: menu
+        readonly property real pad: Style.space(6)
+        x: Math.max(Style.space(8), Math.min(root.menuPos.x, root.screenWidth - width - Style.space(8)))
+        y: Math.max(Style.space(8), Math.min(root.menuPos.y, root.screenHeight - height - Style.space(8)))
+        width: Style.space(232)
+        height: menuColumn.height + pad * 2
+        radius: Style.space(14)
+        color: Util.alpha(Color.background, 0.97)
+        border.width: 1
+        border.color: Util.alpha(Color.foreground, 0.15)
+
+        Column {
+          id: menuColumn
+          x: menu.pad
+          y: menu.pad
+          width: parent.width - menu.pad * 2
+
+          Repeater {
+            model: root.menuItems
+
+            Rectangle {
+              id: menuItem
+              required property var modelData
+              width: parent.width
+              height: Style.space(34)
+              radius: Style.space(10)
+              color: itemHover.containsMouse ? Util.alpha(Color.foreground, 0.12) : "transparent"
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                x: Style.space(12)
+                width: parent.width - Style.space(24)
+                elide: Text.ElideRight
+                text: menuItem.modelData.label
+                color: menuItem.modelData.danger ? "#e06c75" : Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              MouseArea {
+                id: itemHover
+                anchors.fill: parent
+                hoverEnabled: true
+                onClicked: root.runMenuAction(menuItem.modelData.action)
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -634,8 +882,12 @@ Item {
     property var entry: null
     property int globalIndex: -1
     readonly property bool selected: root.selectedIndex === globalIndex
+    // Hidden apps only ever appear here via search; dimmed, to say why they
+    // are not in the grid.
+    readonly property bool dimmed: tile.entry ? root.isHidden(tile.entry.id) : false
     width: root.cellWidth
     height: root.cellHeight
+    opacity: tile.dimmed ? 0.45 : 1
 
     Rectangle {
       anchors.fill: parent
@@ -679,7 +931,13 @@ Item {
       id: hover
       anchors.fill: parent
       hoverEnabled: true
-      onClicked: root.launch(tile.globalIndex)
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      onClicked: function(mouse) {
+        if (mouse.button === Qt.RightButton)
+          root.openMenu(tile.entry, tile.mapToItem(null, mouse.x, mouse.y))
+        else
+          root.launch(tile.globalIndex)
+      }
     }
   }
 }
