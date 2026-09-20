@@ -621,7 +621,8 @@ Item {
   readonly property int cellWidth: Math.round(iconSize * 1.75)
   readonly property int cellHeight: Math.round(iconSize + Style.font.body * 2 + Style.space(28))
   readonly property int columns: Math.max(4, Math.min(8, Math.floor(root.screenWidth * 0.84 / cellWidth)))
-  readonly property int rows: Math.max(2, Math.min(5, Math.floor((root.screenHeight - Style.space(240)) / cellHeight)))
+  // Leave room for the workspace strip between search and the app grid.
+  readonly property int rows: Math.max(2, Math.min(5, Math.floor((root.screenHeight - Style.space(280)) / cellHeight)))
   readonly property int perPage: columns * rows
   readonly property int dashItemSize: Math.round(root.iconSize * 0.72)
   readonly property int dashCell: root.dashItemSize + Style.space(14)
@@ -631,6 +632,48 @@ Item {
   readonly property int dashSlots: root.favouriteEntries.length
     + (root.dragActive && root.dropOnDash && root.dashFrom < 0 ? 1 : 0)
   readonly property int pageCount: Math.max(1, Math.ceil(apps.length / perPage))
+
+  function workspaceById(id) {
+    var values = Hyprland.workspaces.values
+    for (var i = 0; i < values.length; i++)
+      if (values[i].id === id) return values[i]
+    return null
+  }
+
+  function workspaceIds() {
+    var ids = [1, 2, 3, 4, 5]
+    var values = Hyprland.workspaces.values
+    for (var i = 0; i < values.length; i++) {
+      var id = values[i].id
+      if (id > 0 && id <= 10 && ids.indexOf(id) === -1) ids.push(id)
+    }
+    ids.sort(function(left, right) { return left - right })
+    return ids
+  }
+
+  property int pendingWorkspace: -1
+
+  function focusWorkspace(id) {
+    // Two things bite here. Hyprland's config is Lua, so a bare
+    // "workspace 2" is parsed as Lua and dies ("')' expected near '2'") --
+    // the dispatcher has to be spelled the way bindings/tiling.lua spells it.
+    // And the switch has to happen *after* the grid is gone: hiding the layer
+    // surface refocuses whatever window had focus before, which drags the old
+    // workspace back with it.
+    root.pendingWorkspace = id
+    root.requestClose()
+    workspaceSwitch.restart()
+  }
+
+  Timer {
+    id: workspaceSwitch
+    interval: root.openMs + 60
+    onTriggered: {
+      if (root.pendingWorkspace < 0) return
+      Hyprland.dispatch('hl.dsp.focus({ workspace = "' + root.pendingWorkspace + '" })')
+      root.pendingWorkspace = -1
+    }
+  }
 
   function select(index) {
     if (root.apps.length === 0) return
@@ -1054,13 +1097,57 @@ Item {
         }
       }
 
+      // Workspace strip: the Activities-style overview keeps the desktop
+      // context visible while choosing an app. It mirrors Omarchy's bar model
+      // and does not persist or rename workspaces.
+      Row {
+        id: workspaceStrip
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: searchPill.y + searchPill.height + Style.space(14)
+        spacing: Style.space(8)
+
+        Repeater {
+          model: root.workspaceIds()
+
+          Rectangle {
+            required property int modelData
+            readonly property var workspace: root.workspaceById(modelData)
+            readonly property bool occupied: workspace !== null && workspace.toplevels.values.length > 0
+            readonly property bool focused: Hyprland.focusedWorkspace !== null
+              && Hyprland.focusedWorkspace.id === modelData
+            width: Style.space(28)
+            height: Style.space(24)
+            radius: height / 2
+            color: focused ? Util.alpha(Color.accent, 0.7)
+              : occupied ? Util.alpha(Color.foreground, 0.18) : Util.alpha(Color.foreground, 0.08)
+            border.width: 1
+            border.color: Util.alpha(Color.foreground, focused ? 0.42 : 0.14)
+            Behavior on color { ColorAnimation { duration: 140 } }
+
+            Text {
+              anchors.centerIn: parent
+              text: modelData === 10 ? "0" : String(modelData)
+              color: Color.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              font.bold: parent.focused
+            }
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: root.focusWorkspace(parent.modelData)
+            }
+          }
+        }
+      }
+
       // Paged grid
       Item {
         id: viewport
         width: root.columns * root.cellWidth
         height: root.rows * root.cellHeight
         anchors.horizontalCenter: parent.horizontalCenter
-        y: searchPill.y + searchPill.height + Style.space(36)
+        y: workspaceStrip.y + workspaceStrip.height + Style.space(18)
         clip: true
 
         Item {
