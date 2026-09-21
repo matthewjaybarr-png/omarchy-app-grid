@@ -135,7 +135,8 @@ Item {
       searchFocus: searchInput.activeFocus,
       drag: root.dragActive
         ? { source: root.dragSource, id: root.dragId, from: root.dragFrom,
-            drop: root.dropIndex, dash: root.dropOnDash ? root.dashDropIndex : -1 }
+            drop: root.dropIndex, dash: root.dropOnDash ? root.dashDropIndex : -1,
+            ws: root.dropWorkspace }
         : null,
       order: root.order.length,
       folders: root.folderItems.length,
@@ -652,6 +653,17 @@ Item {
   }
 
   property int pendingWorkspace: -1
+  property var pendingLaunch: null
+
+  // Drop an app on a workspace pill to open it there. There's no need to
+  // re-derive the command line: switch first, then hand the entry to the
+  // library's own launcher, which knows about DBus activation, Terminal=true
+  // and the rest.
+  function launchOnWorkspace(entry, id) {
+    if (!entry || !root.appLibrary) return
+    root.pendingLaunch = entry
+    root.focusWorkspace(id)
+  }
 
   function focusWorkspace(id) {
     // Two things bite here. Hyprland's config is Lua, so a bare
@@ -672,6 +684,20 @@ Item {
       if (root.pendingWorkspace < 0) return
       Hyprland.dispatch('hl.dsp.focus({ workspace = "' + root.pendingWorkspace + '" })')
       root.pendingWorkspace = -1
+      if (root.pendingLaunch) launchAfterSwitch.restart()
+    }
+  }
+
+  // Hyprland answers the dispatch asynchronously, so give the switch a beat
+  // to land before launching, or the window opens on the old workspace.
+  Timer {
+    id: launchAfterSwitch
+    interval: 140
+    onTriggered: {
+      var entry = root.pendingLaunch
+      root.pendingLaunch = null
+      if (entry && root.appLibrary)
+        root.appLibrary.launch(entry.id, root.appLibrary.entryName(entry))
     }
   }
 
@@ -798,6 +824,7 @@ Item {
   property int dropIndex: -1
   property int dashDropIndex: -1
   property bool dropOnDash: false
+  property int dropWorkspace: -1    // workspace pill under the pointer, -1 if none
   property string dragId: ""
   property string dragIcon: ""
   property var dragItem: null
@@ -852,6 +879,17 @@ Item {
     return Math.max(0, Math.min(root.apps.length - 1, slot))
   }
 
+  // Pills are all one width with one spacing, so a uniform step is exact.
+  function workspaceIdAt(scene) {
+    if (!workspaceStrip.visible) return -1
+    if (!root.pointInItem(workspaceStrip, scene, Style.space(10))) return -1
+    var ids = root.workspaceIds()
+    if (ids.length === 0) return -1
+    var p = workspaceStrip.mapFromItem(null, scene.x, scene.y)
+    var i = Math.floor(p.x / (workspaceStrip.width / ids.length))
+    return ids[Math.max(0, Math.min(ids.length - 1, i))]
+  }
+
   function dashIndexAt(dashX) {
     var i = Math.round((dashX - dashRow.x) / root.dashStep)
     return Math.max(0, Math.min(root.favouriteEntries.length, i))
@@ -879,6 +917,16 @@ Item {
     if (!root.dragActive) return
     root.dragPos = scene
     var dragged = root.dragSource === "grid" ? root.apps[root.dragFrom] : null
+    // Over the strip, everything else stands still: no reflow, no fold, no
+    // page flip. A folder has nothing to launch, so it isn't a candidate.
+    root.dropWorkspace = (dragged && dragged.isFolder) ? -1 : root.workspaceIdAt(scene)
+    if (root.dropWorkspace > 0) {
+      root.dropOnDash = false
+      root.dropIndex = root.dragFrom
+      root.clearFolderHover()
+      root.setEdgeDir(0)
+      return
+    }
     root.dropOnDash = dash.visible && !(dragged && dragged.isFolder)
       && root.pointInItem(dash, scene, Style.space(14))
     if (root.dropOnDash) {
@@ -933,7 +981,9 @@ Item {
 
   function endDrag() {
     if (!root.dragActive) return
-    if (root.folderTarget >= 0 && !root.dropOnDash) {
+    if (root.dropWorkspace > 0) {
+      root.launchOnWorkspace(root.dragItem, root.dropWorkspace)
+    } else if (root.folderTarget >= 0 && !root.dropOnDash) {
       root.makeFolder(root.dragFrom, root.folderTarget)
     } else if (root.dropOnDash) {
       root.setFavouriteAt(root.dragId, root.dashDropIndex)
@@ -959,6 +1009,7 @@ Item {
     root.dropIndex = -1
     root.dashDropIndex = -1
     root.dropOnDash = false
+    root.dropWorkspace = -1
     root.dragId = ""
     root.dragIcon = ""
     root.dragItem = null
@@ -1082,7 +1133,8 @@ Item {
             }
             switch (event.key) {
             case Qt.Key_Escape:
-              if (root.menuEntry) root.closeMenu()
+              if (root.dragActive) root.cancelDrag()
+              else if (root.menuEntry) root.closeMenu()
               else if (root.openFolderId !== "") root.openFolderId = ""
               else if (root.query.length > 0) root.query = ""
               else root.requestClose()
@@ -1126,18 +1178,23 @@ Item {
               && Hyprland.focusedWorkspace.id === modelData
             id: pill
             readonly property bool hovered: pillMouse.containsMouse
+            readonly property bool dropTarget: root.dragActive && root.dropWorkspace === pill.modelData
             width: Style.space(28)
             height: Style.space(24)
             radius: height / 2
             // Three states that have to be legible at a glance: current
             // (accent), has windows (solid), empty (hollow). The first pass
             // separated the last two by 0.1 alpha, which read as identical.
-            color: pill.focused ? Util.alpha(Color.accent, 0.75)
+            color: pill.dropTarget ? Util.alpha(Color.accent, 0.5)
+              : pill.focused ? Util.alpha(Color.accent, 0.75)
               : pill.occupied ? Util.alpha(Color.foreground, pill.hovered ? 0.34 : 0.24)
               : pill.hovered ? Util.alpha(Color.foreground, 0.12) : "transparent"
-            border.width: 1
-            border.color: Util.alpha(Color.foreground,
-              pill.focused ? 0.45 : pill.occupied ? 0.3 : 0.16)
+            border.width: pill.dropTarget ? 2 : 1
+            border.color: pill.dropTarget ? Color.accent
+              : Util.alpha(Color.foreground,
+                  pill.focused ? 0.45 : pill.occupied ? 0.3 : 0.16)
+            scale: pill.dropTarget ? 1.18 : 1
+            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
             Behavior on color { ColorAnimation { duration: 140 } }
             Behavior on border.color { ColorAnimation { duration: 140 } }
 
@@ -1352,9 +1409,16 @@ Item {
       visible: root.dragActive && !!root.dragItem
       width: root.dragIconSize
       height: root.dragIconSize
+      // Offset rather than a Behavior on y: y tracks the pointer, so animating
+      // it directly would lag the whole drag.
+      property real stripDodge: root.dropWorkspace > 0 ? Style.space(34) : 0
+      Behavior on stripDodge { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
       x: root.dragPos.x - root.dragGrab.x
-      y: root.dragPos.y - root.dragGrab.y
-      scale: 1.12
+      y: root.dragPos.y - root.dragGrab.y + dragGhost.stripDodge
+      // Full size the icon is wider than a workspace pill and hides the one
+      // being aimed at, so shrink out of the way over the strip.
+      scale: root.dropWorkspace > 0 ? 0.5 : 1.12
+      Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
       opacity: 0.95
 
       Image {
