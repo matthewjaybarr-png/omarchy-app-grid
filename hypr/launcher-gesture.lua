@@ -1,4 +1,4 @@
--- matt.launcher: GNOME-style 3-finger swipe. Up opens the app grid, down
+-- matthewjaybarr.app-grid: GNOME-style 3-finger swipe. Up opens the app grid, down
 -- closes it, and the grid follows the fingers the whole way.
 --
 -- Not loaded from here. scripts/dev-link.sh links it into
@@ -55,5 +55,5 @@ local function tracker(prefix, sign)
   }
 end
 
-hl.gesture({ fingers = 3, direction = "up", action = tracker("matt-launcher:up", -1) })
-hl.gesture({ fingers = 3, direction = "down", action = tracker("matt-launcher:down", 1) })
+hl.gesture({ fingers = 3, direction = "up", action = tracker("omarchy-app-grid:up", -1) })
+hl.gesture({ fingers = 3, direction = "down", action = tracker("omarchy-app-grid:down", 1) })

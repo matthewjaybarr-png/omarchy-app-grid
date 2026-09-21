@@ -17,7 +17,7 @@ Item {
   property var shell: null
   property var manifest: null
 
-  readonly property string pluginId: "matt.launcher"
+  readonly property string pluginId: "matthewjaybarr.app-grid"
 
   // The shell is meant to hand `menu` plugins an app-library facade, but on
   // Omarchy 4.0.4 it arrives null for this third-party plugin (the other
@@ -120,7 +120,7 @@ Item {
 
   function ping() { return "ok" }
 
-  // omarchy-shell shell call matt.launcher debugState x
+  // omarchy-shell shell call matthewjaybarr.app-grid debugState x
   function debugState() {
     return JSON.stringify({
       shell: !!root.shell,
@@ -278,7 +278,7 @@ Item {
 
   FileView {
     id: prefsFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/matt-launcher.json"
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/omarchy-app-grid.json"
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
@@ -530,7 +530,7 @@ Item {
   }
 
   // ---- touchpad gesture ----
-  // hypr/launcher-gesture.lua sends `matt-launcher:<up|down>-<begin|at|end>`
+  // hypr/launcher-gesture.lua sends `omarchy-app-grid:<up|down>-<begin|at|end>`
   // on Hyprland's event socket. Listening is deliberately not gated on
   // `opened`: the first event of an opening swipe arrives while closed.
 
@@ -549,9 +549,9 @@ Item {
     function onRawEvent(event) {
       if (event.name !== "custom") return
       var data = String(event.data || "")
-      if (data.indexOf("matt-launcher:") !== 0) return
+      if (data.indexOf("omarchy-app-grid:") !== 0) return
       var parts = data.split(" ")
-      var head = parts[0].substring("matt-launcher:".length)
+      var head = parts[0].substring("omarchy-app-grid:".length)
       var mode = head.indexOf("up-") === 0 ? "open" : "close"
       var stage = head.substring(head.indexOf("-") + 1)
       if (stage === "begin") root.gestureBegin(mode)
@@ -1046,7 +1046,7 @@ Item {
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "matt-launcher"
+    WlrLayershell.namespace: "omarchy-app-grid"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: root.interactive ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 

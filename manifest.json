@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "id": "matt.launcher",
-  "name": "App Launcher",
-  "version": "0.1.0",
-  "author": "matt",
+  "id": "matthewjaybarr.app-grid",
+  "name": "App Grid",
+  "version": "0.2.0",
+  "author": "Matt Barr",
   "license": "MIT",
-  "description": "GNOME-style full-screen app grid. Opens with SUPER+ALT+SPACE or a 3-finger swipe up that follows your fingers; swipe down to close.",
+  "homepage": "https://github.com/matthewjaybarr-png/omarchy-app-grid",
+  "description": "GNOME-style full-screen app grid: paged icons, search, favourites dash, folders, drag to reorder, and a workspace strip. Opens with SUPER+ALT+SPACE or a 3-finger swipe up that follows your fingers.",
   "kinds": ["menu"],
   "keepLoaded": true,
   "entryPoints": {
