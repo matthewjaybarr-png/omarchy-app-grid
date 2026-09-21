@@ -5,7 +5,7 @@ as an omarchy-shell plugin. Paged icons, search, a favourites dash, folders,
 drag to reorder, and a workspace strip — opened with a key or a 3-finger swipe
 up that follows your fingers the whole way.
 
-![The app grid open over the wallpaper](docs/screenshot-grid.png)
+![The app grid open over the wallpaper](preview.png)
 
 Built against Omarchy 4.0.4 (Hyprland 0.56.2, Quickshell 0.3.1).
 
