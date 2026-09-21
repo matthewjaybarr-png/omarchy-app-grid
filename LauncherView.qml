@@ -143,7 +143,9 @@ Item {
       openFolder: root.openFolderId,
       // Last scroll event seen, for working out whether two-finger paging is
       // reaching the surface at all.
-      wheel: root.lastWheel
+      wheel: root.lastWheel,
+      wsIds: root.workspaceIds(),
+      focusedMonitor: Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : null
     })
   }
 
@@ -641,13 +643,23 @@ Item {
     return null
   }
 
+  // The grid follows the focused monitor, so the strip does too: a workspace
+  // that lives on another monitor isn't this screen's to switch to. Ids that
+  // don't exist anywhere yet stay listed -- switching to one creates it here.
   function workspaceIds() {
-    var ids = [1, 2, 3, 4, 5]
+    var monitor = Hyprland.focusedMonitor
     var values = Hyprland.workspaces.values
+    var ids = []
+    var exists = ({})
     for (var i = 0; i < values.length; i++) {
-      var id = values[i].id
-      if (id > 0 && id <= 10 && ids.indexOf(id) === -1) ids.push(id)
+      var ws = values[i]
+      if (ws.id < 1 || ws.id > 10) continue
+      exists[ws.id] = true
+      // By name: it's the one identifier confirmed to resolve on both
+      // objects, and comparing two undefined ids would silently match.
+      if (!monitor || !ws.monitor || ws.monitor.name === monitor.name) ids.push(ws.id)
     }
+    for (var n = 1; n <= 5; n++) if (!exists[n]) ids.push(n)
     ids.sort(function(left, right) { return left - right })
     return ids
   }
@@ -1127,7 +1139,11 @@ Item {
             // layer surface, so Ctrl is what's left.
             if ((event.modifiers & Qt.ControlModifier)
                 && event.key >= Qt.Key_0 && event.key <= Qt.Key_9) {
-              root.focusWorkspace(event.key === Qt.Key_0 ? 10 : event.key - Qt.Key_0)
+              // Only what the strip is showing: on a second monitor's
+              // workspace the pill is hidden, so the shortcut shouldn't
+              // quietly do something the grid says isn't there.
+              var wanted = event.key === Qt.Key_0 ? 10 : event.key - Qt.Key_0
+              if (root.workspaceIds().indexOf(wanted) >= 0) root.focusWorkspace(wanted)
               event.accepted = true
               return
             }
