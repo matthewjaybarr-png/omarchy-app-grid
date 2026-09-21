@@ -100,4 +100,17 @@ and drop the binding you added.
   grid's state as JSON (the trailing argument is required). Handy in a bug
   report.
 
+## Hacking on it
+
+```bash
+ln -sfn "$PWD" ~/.config/omarchy/plugins/matthewjaybarr.app-grid
+omarchy-shell shell rescanPlugins    # the shell's watcher doesn't follow symlinks
+```
+
+`Launcher.qml` is a small wrapper that loads `LauncherView.qml` from a
+`?v=<timestamp>` URL. A `keepLoaded` plugin keeps its compiled component when
+the shell clears its cache, so without that indirection a rescan wouldn't pick
+up your edits; changes to `Launcher.qml` itself still need
+`omarchy restart shell`.
+
 MIT licensed.
