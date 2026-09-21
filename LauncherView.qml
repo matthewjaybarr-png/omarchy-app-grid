@@ -1071,6 +1071,15 @@ Item {
           onTextEdited: root.query = text
 
           Keys.onPressed: function(event) {
+            // Ctrl+1..9 / Ctrl+0 reach the workspace strip without the mouse.
+            // Plain digits have to keep typing, and SUPER never reaches a
+            // layer surface, so Ctrl is what's left.
+            if ((event.modifiers & Qt.ControlModifier)
+                && event.key >= Qt.Key_0 && event.key <= Qt.Key_9) {
+              root.focusWorkspace(event.key === Qt.Key_0 ? 10 : event.key - Qt.Key_0)
+              event.accepted = true
+              return
+            }
             switch (event.key) {
             case Qt.Key_Escape:
               if (root.menuEntry) root.closeMenu()
@@ -1115,27 +1124,38 @@ Item {
             readonly property bool occupied: workspace !== null && workspace.toplevels.values.length > 0
             readonly property bool focused: Hyprland.focusedWorkspace !== null
               && Hyprland.focusedWorkspace.id === modelData
+            id: pill
+            readonly property bool hovered: pillMouse.containsMouse
             width: Style.space(28)
             height: Style.space(24)
             radius: height / 2
-            color: focused ? Util.alpha(Color.accent, 0.7)
-              : occupied ? Util.alpha(Color.foreground, 0.18) : Util.alpha(Color.foreground, 0.08)
+            // Three states that have to be legible at a glance: current
+            // (accent), has windows (solid), empty (hollow). The first pass
+            // separated the last two by 0.1 alpha, which read as identical.
+            color: pill.focused ? Util.alpha(Color.accent, 0.75)
+              : pill.occupied ? Util.alpha(Color.foreground, pill.hovered ? 0.34 : 0.24)
+              : pill.hovered ? Util.alpha(Color.foreground, 0.12) : "transparent"
             border.width: 1
-            border.color: Util.alpha(Color.foreground, focused ? 0.42 : 0.14)
+            border.color: Util.alpha(Color.foreground,
+              pill.focused ? 0.45 : pill.occupied ? 0.3 : 0.16)
             Behavior on color { ColorAnimation { duration: 140 } }
+            Behavior on border.color { ColorAnimation { duration: 140 } }
 
             Text {
               anchors.centerIn: parent
-              text: modelData === 10 ? "0" : String(modelData)
-              color: Color.foreground
+              text: pill.modelData === 10 ? "0" : String(pill.modelData)
+              color: Util.alpha(Color.foreground,
+                pill.focused || pill.occupied ? 1 : 0.45)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
-              font.bold: parent.focused
+              font.bold: pill.focused
             }
             MouseArea {
+              id: pillMouse
               anchors.fill: parent
               hoverEnabled: true
-              onClicked: root.focusWorkspace(parent.modelData)
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.focusWorkspace(pill.modelData)
             }
           }
         }
