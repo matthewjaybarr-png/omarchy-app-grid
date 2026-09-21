@@ -1109,6 +1109,7 @@ Item {
         MouseArea { anchors.fill: parent; onClicked: searchInput.forceActiveFocus() }
 
         Text {
+          textFormat: Text.PlainText
           anchors.fill: searchInput
           visible: root.query.length === 0
           text: "Type to search"
@@ -1215,6 +1216,7 @@ Item {
             Behavior on border.color { ColorAnimation { duration: 140 } }
 
             Text {
+              textFormat: Text.PlainText
               anchors.centerIn: parent
               text: pill.modelData === 10 ? "0" : String(pill.modelData)
               color: Util.alpha(Color.foreground,
@@ -1268,6 +1270,7 @@ Item {
         }
 
         Text {
+          textFormat: Text.PlainText
           anchors.centerIn: parent
           visible: root.apps.length === 0
           text: root.query.length > 0 ? "No apps match “" + root.query + "”" : ""
@@ -1559,6 +1562,7 @@ Item {
               }
 
               Text {
+                textFormat: Text.PlainText
                 anchors.top: memberIcon.bottom
                 anchors.topMargin: Style.space(8)
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -1633,6 +1637,7 @@ Item {
               color: itemHover.containsMouse ? Util.alpha(Color.foreground, 0.12) : "transparent"
 
               Text {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 x: Style.space(12)
                 width: parent.width - Style.space(24)
@@ -1752,6 +1757,7 @@ Item {
     }
 
     Text {
+      textFormat: Text.PlainText
       anchors.top: art.bottom
       anchors.topMargin: Style.space(8)
       anchors.horizontalCenter: parent.horizontalCenter
