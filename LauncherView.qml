@@ -145,6 +145,13 @@ Item {
       // reaching the surface at all.
       wheel: root.lastWheel,
       wsIds: root.workspaceIds(),
+      expanded: root.stripExpanded,
+      windows: Hyprland.toplevels.values.map(function(t) {
+        var entry = root.windowEntry(t)
+        return { title: t.title, appId: root.windowAppId(t), address: t.address,
+                 ws: t.workspace ? t.workspace.id : null, entry: entry ? String(entry.id) : null,
+                 at: t.lastIpcObject ? t.lastIpcObject.at : null }
+      }),
       focusedMonitor: Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : null
     })
   }
@@ -187,6 +194,8 @@ Item {
     root.dragOffset = 0
     if (root.appLibrary) root.appLibrary.refreshIcons()
     root.refreshApps()
+    root.refreshWindows()
+    root.stripHint = ""
   }
 
   function pickScreen() {
@@ -292,6 +301,8 @@ Item {
       property var hidden: []
       property var order: []
       property var folders: []
+      // Workspace strip shown as cards with each workspace's windows.
+      property bool overviewExpanded: false
     }
   }
 
@@ -624,8 +635,9 @@ Item {
   readonly property int cellWidth: Math.round(iconSize * 1.75)
   readonly property int cellHeight: Math.round(iconSize + Style.font.body * 2 + Style.space(28))
   readonly property int columns: Math.max(4, Math.min(8, Math.floor(root.screenWidth * 0.84 / cellWidth)))
-  // Leave room for the workspace strip between search and the app grid.
-  readonly property int rows: Math.max(2, Math.min(5, Math.floor((root.screenHeight - Style.space(280)) / cellHeight)))
+  // Leave room for the workspace strip between search and the app grid, and
+  // give up a row when the strip is expanded into cards.
+  readonly property int rows: Math.max(2, Math.min(5, Math.floor((root.screenHeight - Style.space(280) - root.stripExtra) / cellHeight)))
   readonly property int perPage: columns * rows
   readonly property int dashItemSize: Math.round(root.iconSize * 0.72)
   readonly property int dashCell: root.dashItemSize + Style.space(14)
@@ -664,7 +676,91 @@ Item {
     return ids
   }
 
-  property int pendingWorkspace: -1
+  // ---- open windows ----
+  //
+  // A workspace's toplevels carry title and app id directly, but geometry
+  // only lives in lastIpcObject, which Quickshell fills on refreshToplevels().
+  // Refresh when the grid opens and whenever Hyprland reports a window change
+  // while it's up.
+
+  readonly property bool stripExpanded: prefs.overviewExpanded === true
+  readonly property real screenX: root.targetScreen ? root.targetScreen.x : 0
+  readonly property real screenY: root.targetScreen ? root.targetScreen.y : 0
+  readonly property int stripPillHeight: Style.space(24)
+  readonly property int stripToggleWidth: Style.space(28)
+  readonly property int cardWidth: {
+    var n = Math.max(1, root.workspaceIds().length)
+    var room = root.columns * root.cellWidth - root.stripToggleWidth - Style.space(8) * n
+    return Math.floor(Math.min(Style.space(170), room / n))
+  }
+  readonly property int cardHeight: Math.round(root.cardWidth * root.screenHeight / Math.max(1, root.screenWidth))
+  readonly property int stripExtra: root.stripExpanded ? root.cardHeight - root.stripPillHeight : 0
+  // Title of whatever is hovered in the strip, shown under it.
+  property string stripHint: ""
+
+  function setStripExpanded(on) {
+    if (on) root.refreshWindows()
+    prefs.overviewExpanded = on
+  }
+
+  function refreshWindows() { Hyprland.refreshToplevels() }
+
+  Timer { id: windowRefresh; interval: 80; onTriggered: root.refreshWindows() }
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (root.opened && /window|floating|fullscreen/.test(event.name)) windowRefresh.restart()
+    }
+  }
+
+  function windowAppId(toplevel) {
+    if (!toplevel) return ""
+    if (toplevel.wayland && toplevel.wayland.appId) return String(toplevel.wayland.appId)
+    var ipc = toplevel.lastIpcObject
+    return ipc && ipc["class"] ? String(ipc["class"]) : ""
+  }
+
+  // A window's app id is usually its desktop file's id, but not always
+  // (StartupWMClass, case, reverse-DNS names); heuristicLookup covers those.
+  function windowEntry(toplevel) {
+    var appId = root.windowAppId(toplevel)
+    return appId.length > 0 ? DesktopEntries.heuristicLookup(appId) : null
+  }
+
+  function windowIcon(toplevel) {
+    var entry = root.windowEntry(toplevel)
+    return root.iconSource(entry ? entry.icon : root.windowAppId(toplevel))
+  }
+
+  function windowTitle(toplevel) {
+    if (toplevel && toplevel.title) return String(toplevel.title)
+    var entry = root.windowEntry(toplevel)
+    return entry && root.appLibrary ? root.appLibrary.entryName(entry) : root.windowAppId(toplevel)
+  }
+
+  // Tiled first, floating on top, the way they stack on screen.
+  function workspaceWindows(workspace) {
+    if (!workspace) return []
+    var values = workspace.toplevels.values.slice()
+    return values.filter(function(t) { return !(t.lastIpcObject && t.lastIpcObject.floating) })
+      .concat(values.filter(function(t) { return !!(t.lastIpcObject && t.lastIpcObject.floating) }))
+  }
+
+  function workspaceHint(id) {
+    var titles = root.workspaceWindows(root.workspaceById(id)).map(root.windowTitle)
+    var label = "Workspace " + (id === 10 ? "0" : String(id))
+    return titles.length > 0 ? label + ": " + titles.join("  ·  ") : label + " (empty)"
+  }
+
+  function focusWindow(toplevel) {
+    var address = String((toplevel && toplevel.address) || "")
+    if (address.length === 0) return
+    if (address.indexOf("0x") !== 0) address = "0x" + address
+    root.afterClose('hl.dsp.focus({ window = "address:' + address + '" })')
+  }
+
+  property string pendingDispatch: ""
   property var pendingLaunch: null
 
   // Drop an app on a workspace pill to open it there. There's no need to
@@ -678,13 +774,17 @@ Item {
   }
 
   function focusWorkspace(id) {
+    root.afterClose('hl.dsp.focus({ workspace = "' + id + '" })')
+  }
+
+  function afterClose(dispatch) {
     // Two things bite here. Hyprland's config is Lua, so a bare
     // "workspace 2" is parsed as Lua and dies ("')' expected near '2'") --
     // the dispatcher has to be spelled the way bindings/tiling.lua spells it.
     // And the switch has to happen *after* the grid is gone: hiding the layer
     // surface refocuses whatever window had focus before, which drags the old
     // workspace back with it.
-    root.pendingWorkspace = id
+    root.pendingDispatch = dispatch
     root.requestClose()
     workspaceSwitch.restart()
   }
@@ -693,9 +793,9 @@ Item {
     id: workspaceSwitch
     interval: root.openMs + 60
     onTriggered: {
-      if (root.pendingWorkspace < 0) return
-      Hyprland.dispatch('hl.dsp.focus({ workspace = "' + root.pendingWorkspace + '" })')
-      root.pendingWorkspace = -1
+      if (root.pendingDispatch === "") return
+      Hyprland.dispatch(root.pendingDispatch)
+      root.pendingDispatch = ""
       if (root.pendingLaunch) launchAfterSwitch.restart()
     }
   }
@@ -891,15 +991,19 @@ Item {
     return Math.max(0, Math.min(root.apps.length - 1, slot))
   }
 
-  // Pills are all one width with one spacing, so a uniform step is exact.
+  // Pills grow with their window icons, so each one is hit-tested in turn.
   function workspaceIdAt(scene) {
     if (!workspaceStrip.visible) return -1
     if (!root.pointInItem(workspaceStrip, scene, Style.space(10))) return -1
-    var ids = root.workspaceIds()
-    if (ids.length === 0) return -1
-    var p = workspaceStrip.mapFromItem(null, scene.x, scene.y)
-    var i = Math.floor(p.x / (workspaceStrip.width / ids.length))
-    return ids[Math.max(0, Math.min(ids.length - 1, i))]
+    var best = -1, bestDistance = Infinity
+    for (var i = 0; i < stripRepeater.count; i++) {
+      var item = stripRepeater.itemAt(i)
+      if (!item) continue
+      var p = item.mapFromItem(null, scene.x, scene.y)
+      var distance = Math.abs(p.x - item.width / 2)
+      if (distance < bestDistance) { bestDistance = distance; best = item.modelData }
+    }
+    return best
   }
 
   function dashIndexAt(dashX) {
@@ -1148,6 +1252,13 @@ Item {
               event.accepted = true
               return
             }
+            // Ctrl+Down opens the strip into workspace cards, Ctrl+Up folds it.
+            if ((event.modifiers & Qt.ControlModifier)
+                && (event.key === Qt.Key_Down || event.key === Qt.Key_Up)) {
+              root.setStripExpanded(event.key === Qt.Key_Down)
+              event.accepted = true
+              return
+            }
             switch (event.key) {
             case Qt.Key_Escape:
               if (root.dragActive) root.cancelDrag()
@@ -1176,8 +1287,10 @@ Item {
       }
 
       // Workspace strip: the Activities-style overview keeps the desktop
-      // context visible while choosing an app. It mirrors Omarchy's bar model
-      // and does not persist or rename workspaces.
+      // context visible while choosing an app. Collapsed, each pill shows the
+      // icons of what's open there; expanded (Ctrl+Down or the chevron), each
+      // becomes a card laid out like the workspace itself. It mirrors
+      // Omarchy's bar model and does not persist or rename workspaces.
       Row {
         id: workspaceStrip
         anchors.horizontalCenter: parent.horizontalCenter
@@ -1185,55 +1298,239 @@ Item {
         spacing: Style.space(8)
 
         Repeater {
+          id: stripRepeater
           model: root.workspaceIds()
 
           Rectangle {
             required property int modelData
             readonly property var workspace: root.workspaceById(modelData)
-            readonly property bool occupied: workspace !== null && workspace.toplevels.values.length > 0
+            readonly property var windows: root.workspaceWindows(workspace)
+            readonly property bool occupied: windows.length > 0
             readonly property bool focused: Hyprland.focusedWorkspace !== null
               && Hyprland.focusedWorkspace.id === modelData
+            readonly property string label: modelData === 10 ? "0" : String(modelData)
             id: pill
             readonly property bool hovered: pillMouse.containsMouse
             readonly property bool dropTarget: root.dragActive && root.dropWorkspace === pill.modelData
-            width: Style.space(28)
-            height: Style.space(24)
-            radius: height / 2
+            readonly property int iconLimit: 3
+            width: root.stripExpanded ? root.cardWidth
+              : Math.max(Style.space(28), pillRow.implicitWidth + Style.space(16))
+            height: root.stripExpanded ? root.cardHeight : root.stripPillHeight
+            radius: root.stripExpanded ? Style.space(8) : height / 2
             // Three states that have to be legible at a glance: current
             // (accent), has windows (solid), empty (hollow). The first pass
             // separated the last two by 0.1 alpha, which read as identical.
+            // Cards keep the same language but hold back the fill so the
+            // windows inside stay readable.
             color: pill.dropTarget ? Util.alpha(Color.accent, 0.5)
+              : root.stripExpanded ? Util.alpha(Color.background, pill.hovered ? 0.75 : 0.6)
               : pill.focused ? Util.alpha(Color.accent, 0.75)
               : pill.occupied ? Util.alpha(Color.foreground, pill.hovered ? 0.34 : 0.24)
               : pill.hovered ? Util.alpha(Color.foreground, 0.12) : "transparent"
-            border.width: pill.dropTarget ? 2 : 1
+            border.width: pill.dropTarget || (root.stripExpanded && pill.focused) ? 2 : 1
             border.color: pill.dropTarget ? Color.accent
+              : root.stripExpanded && pill.focused ? Util.alpha(Color.accent, 0.9)
               : Util.alpha(Color.foreground,
                   pill.focused ? 0.45 : pill.occupied ? 0.3 : 0.16)
-            scale: pill.dropTarget ? 1.18 : 1
+            scale: pill.dropTarget ? (root.stripExpanded ? 1.06 : 1.18) : 1
             Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
             Behavior on color { ColorAnimation { duration: 140 } }
             Behavior on border.color { ColorAnimation { duration: 140 } }
+            Behavior on width { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+            Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
-            Text {
-              textFormat: Text.PlainText
-              anchors.centerIn: parent
-              text: pill.modelData === 10 ? "0" : String(pill.modelData)
-              color: Util.alpha(Color.foreground,
-                pill.focused || pill.occupied ? 1 : 0.45)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              font.bold: pill.focused
-            }
             MouseArea {
               id: pillMouse
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: root.focusWorkspace(pill.modelData)
+              onContainsMouseChanged: {
+                if (containsMouse) root.stripHint = root.workspaceHint(pill.modelData)
+                else if (root.stripHint === root.workspaceHint(pill.modelData)) root.stripHint = ""
+              }
+            }
+
+            // Collapsed: the number, then the first few windows' icons.
+            Row {
+              id: pillRow
+              anchors.centerIn: parent
+              spacing: Style.space(4)
+              opacity: root.stripExpanded ? 0 : 1
+              visible: opacity > 0
+              Behavior on opacity { NumberAnimation { duration: 140 } }
+
+              Text {
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                text: pill.label
+                color: Util.alpha(Color.foreground,
+                  pill.focused || pill.occupied ? 1 : 0.45)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: pill.focused
+              }
+              Repeater {
+                model: pill.windows.slice(0, pill.iconLimit)
+                Image {
+                  required property var modelData
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(15)
+                  height: width
+                  sourceSize.width: width * 2
+                  sourceSize.height: height * 2
+                  fillMode: Image.PreserveAspectFit
+                  asynchronous: true
+                  source: root.windowIcon(modelData)
+                }
+              }
+              Text {
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                visible: pill.windows.length > pill.iconLimit
+                text: "+" + (pill.windows.length - pill.iconLimit)
+                color: Util.alpha(Color.foreground, 0.75)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            // Expanded: a scaled-down copy of the workspace, one box per
+            // window at its real position. A box is the slot a live preview
+            // drops into later; the card around it doesn't change.
+            Item {
+              id: miniScreen
+              anchors.fill: parent
+              anchors.margins: Style.space(3)
+              clip: true
+              opacity: root.stripExpanded ? 1 : 0
+              visible: opacity > 0
+              Behavior on opacity { NumberAnimation { duration: 180 } }
+              readonly property real ratio: width / Math.max(1, root.screenWidth)
+
+              Text {
+                textFormat: Text.PlainText
+                anchors.centerIn: parent
+                visible: !pill.occupied
+                text: pill.label
+                color: Util.alpha(Color.foreground, 0.3)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.subtitle
+              }
+
+              Repeater {
+                model: pill.windows
+                Rectangle {
+                  id: windowBox
+                  required property var modelData
+                  readonly property var ipc: modelData.lastIpcObject || ({})
+                  readonly property bool placed: !!ipc.at && !!ipc.size
+                  readonly property bool hovered: boxMouse.containsMouse
+                  // Until Hyprland reports geometry, fill the card rather than
+                  // stacking every window in the corner.
+                  x: placed ? (ipc.at[0] - root.screenX) * miniScreen.ratio : 0
+                  y: placed ? (ipc.at[1] - root.screenY) * miniScreen.ratio : 0
+                  width: placed ? Math.max(4, ipc.size[0] * miniScreen.ratio) : miniScreen.width
+                  height: placed ? Math.max(4, ipc.size[1] * miniScreen.ratio) : miniScreen.height
+                  radius: Style.space(3)
+                  color: Util.alpha(Color.foreground, hovered ? 0.22 : 0.12)
+                  border.width: 1
+                  border.color: hovered ? Color.accent : Util.alpha(Color.foreground, 0.28)
+
+                  Image {
+                    anchors.centerIn: parent
+                    width: Math.max(10, Math.min(Style.space(40), Math.min(parent.width, parent.height) * 0.5))
+                    height: width
+                    sourceSize.width: width * 2
+                    sourceSize.height: height * 2
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    source: root.windowIcon(windowBox.modelData)
+                  }
+
+                  MouseArea {
+                    id: boxMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.focusWindow(windowBox.modelData)
+                    onContainsMouseChanged: {
+                      var title = root.windowTitle(windowBox.modelData)
+                      if (containsMouse) root.stripHint = title
+                      else if (root.stripHint === title) root.stripHint = ""
+                    }
+                  }
+                }
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.margins: Style.space(3)
+                visible: pill.occupied
+                text: pill.label
+                color: pill.focused ? Color.accent : Util.alpha(Color.foreground, 0.8)
+                style: Text.Outline
+                styleColor: Util.alpha(Color.background, 0.8)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: pill.focused
+              }
             }
           }
         }
+
+        // Expand / fold the strip.
+        Rectangle {
+          id: stripToggle
+          anchors.verticalCenter: parent.verticalCenter
+          width: root.stripToggleWidth
+          height: root.stripPillHeight
+          radius: height / 2
+          color: toggleMouse.containsMouse ? Util.alpha(Color.foreground, 0.12) : "transparent"
+          border.width: 1
+          border.color: Util.alpha(Color.foreground, 0.16)
+
+          Text {
+            textFormat: Text.PlainText
+            anchors.centerIn: parent
+            // The UI font has no arrow glyphs; a turned chevron reads the same.
+            text: "‹"
+            rotation: root.stripExpanded ? 90 : -90
+            Behavior on rotation { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+            color: Util.alpha(Color.foreground, 0.7)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+          MouseArea {
+            id: toggleMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.setStripExpanded(!root.stripExpanded)
+            onContainsMouseChanged: {
+              var hint = root.stripExpanded ? "Fold workspaces (Ctrl+Up)" : "Show workspaces (Ctrl+Down)"
+              if (containsMouse) root.stripHint = hint
+              else if (root.stripHint === hint) root.stripHint = ""
+            }
+          }
+        }
+      }
+
+      // Whatever is hovered in the strip, by name.
+      Text {
+        textFormat: Text.PlainText
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: workspaceStrip.y + workspaceStrip.height + Style.space(2)
+        width: Math.min(implicitWidth, viewport.width)
+        visible: root.stripHint.length > 0 && !root.dragActive
+        text: root.stripHint
+        elide: Text.ElideRight
+        horizontalAlignment: Text.AlignHCenter
+        color: Util.alpha(Color.foreground, 0.75)
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
       }
 
       // Paged grid
