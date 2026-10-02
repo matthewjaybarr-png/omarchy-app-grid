@@ -1437,9 +1437,25 @@ Item {
                   border.width: 1
                   border.color: hovered ? Color.accent : Util.alpha(Color.foreground, 0.28)
 
+                  // Live picture of the window. Capture only runs while the
+                  // cards are actually on screen; otherwise the source is
+                  // dropped and the box falls back to the app icon.
+                  ScreencopyView {
+                    id: preview
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    live: true
+                    captureSource: root.opened && root.stripExpanded ? windowBox.modelData.wayland : null
+                  }
+
+                  // Centred while there's no picture, then a corner badge.
                   Image {
-                    anchors.centerIn: parent
-                    width: Math.max(10, Math.min(Style.space(40), Math.min(parent.width, parent.height) * 0.5))
+                    anchors.centerIn: preview.hasContent ? undefined : parent
+                    anchors.right: preview.hasContent ? parent.right : undefined
+                    anchors.bottom: preview.hasContent ? parent.bottom : undefined
+                    anchors.margins: Style.space(3)
+                    width: preview.hasContent ? Math.max(10, Math.min(Style.space(18), parent.height * 0.3))
+                      : Math.max(10, Math.min(Style.space(40), Math.min(parent.width, parent.height) * 0.5))
                     height: width
                     sourceSize.width: width * 2
                     sourceSize.height: height * 2
