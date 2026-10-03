@@ -2,8 +2,8 @@
 
 A GNOME-style full-screen app grid for [Omarchy](https://omarchy.org), running
 as an omarchy-shell plugin. Paged icons, search, a favourites dash, folders,
-drag to reorder, and a workspace strip — opened with a key or a 3-finger swipe
-up that follows your fingers the whole way.
+drag to reorder, and a workspace overview with live window previews — opened
+with a key or a 3-finger swipe up that follows your fingers the whole way.
 
 ![The app grid open over the wallpaper](preview.png)
 
@@ -41,7 +41,17 @@ binds the same 3-finger slots.
 ## Using it
 
 **Search** — just type. Enter launches the top hit, arrows/Tab move, Escape
-clears and then closes.
+clears and then closes. Open windows whose title matches come first; picking
+one switches to it.
+
+**Open apps** — a dot under an icon means the app has a window open. Clicking
+it switches to that window (the most recently used one) instead of starting a
+second copy. Middle-click, `Ctrl`+click or `Ctrl+Enter` always launches a new
+one. Prefer the old behaviour? Right-click empty space and pick **Always open
+new windows**.
+
+**App actions** — the right-click menu lists the app's own extras from its
+`.desktop` file, such as **New Private Window**.
 
 **Paging** — scroll, swipe two fingers, PageUp/PageDown, or click the dots.
 
@@ -63,13 +73,18 @@ page. Apps you have never moved keep the library's own ranking and sit after
 the arranged ones, which is where a newly installed app belongs.
 
 **Workspaces** — the strip above the grid shows the focused monitor's
-workspaces: current in the accent colour, ones with windows filled, empty ones
-hollow. Click a pill or press `Ctrl+<n>` to switch, or **drop an app on a pill
-to open it there**.
+workspaces, with the icons of the apps open on each. Click a pill or press
+`Ctrl+<n>` to switch, or **drop an app on a pill to open it there**.
+
+Click the chevron at the end of the strip (or `Ctrl+Down`; `Ctrl+Up` folds it)
+to open the pills into cards that show each workspace's windows where they sit,
+with live previews. Hover a window for its title, click it to jump straight to
+it. Previews only run while the cards are open; folded, the strip costs
+nothing.
 
 Everything you arrange lives in
 `~/.local/state/omarchy/omarchy-app-grid.json` — favourites, hidden apps,
-grid order, folders. Delete it to start over.
+grid order, folders, and the two preferences above. Delete it to start over.
 
 > **Uninstall… really uninstalls.** The third entry in the right-click menu
 > hands off to Omarchy's own `omarchy-remove-launcher-entry`, which deletes
@@ -93,9 +108,11 @@ and drop the binding you added.
   grid re-indexes PNGs by pixel size and overrides only the names that
   resolved to one.
 - Multi-monitor: the grid follows `Hyprland.focusedMonitor` and the workspace
-  strip lists that monitor's workspaces. The strip is tested with a headless
-  output; the grid itself has only ever run on one display, so that part is
-  reasoned rather than tested. Reports welcome.
+  strip lists that monitor's workspaces. Tested with a headless second output
+  (grid, cards, previews and click-to-focus), not yet on two real displays.
+  Reports welcome.
+- Live previews use Wayland screencopy. With four windows previewing, the shell
+  sat around 12–15% of one core on the test laptop; folded or closed, 0%.
 - `omarchy-shell shell call matthewjaybarr.app-grid debugState x` dumps the
   grid's state as JSON (the trailing argument is required). Handy in a bug
   report.
