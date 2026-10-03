@@ -223,9 +223,23 @@ Item {
         return !root.isHidden(entry.id) && !filed[String(entry.id)]
       })
       entries = root.orderedEntries(entries.concat(folders))
+    } else {
+      entries = root.matchingWindows(root.query).concat(entries)
     }
     root.apps = entries
     if (root.page >= root.pageCount) root.page = Math.max(0, root.pageCount - 1)
+  }
+
+  // Open windows whose title matches, as grid items that switch to them.
+  function matchingWindows(query) {
+    var needle = query.toLowerCase()
+    return Hyprland.toplevels.values.filter(function(t) {
+      return String(t.title || "").toLowerCase().indexOf(needle) >= 0
+    }).map(function(t) {
+      var entry = root.windowEntry(t)
+      return { id: "window:" + t.address, isWindow: true, toplevel: t,
+               name: root.windowTitle(t), icon: entry ? entry.icon : root.windowAppId(t) }
+    })
   }
 
   // ---- pinned and hidden apps ----
@@ -363,7 +377,7 @@ Item {
 
   function itemName(item) {
     if (!item) return ""
-    return item.isFolder ? item.name : root.appLibrary ? root.appLibrary.entryName(item) : ""
+    return item.isFolder || item.isWindow ? item.name : root.appLibrary ? root.appLibrary.entryName(item) : ""
   }
 
   function foldersCopy() { return JSON.parse(JSON.stringify(prefs.folders || [])) }
@@ -452,6 +466,7 @@ Item {
   // `fresh` (middle-click, Ctrl+click, Ctrl+Enter) always starts a new copy.
   function launchEntry(entry, fresh) {
     if (entry && entry.isFolder) { root.openFolderId = String(entry.id); return }
+    if (entry && entry.isWindow) { root.focusWindow(entry.toplevel); return }
     if (!entry || !root.appLibrary) return
     var windows = root.runningWindows[String(entry.id)]
     if (windows && !fresh && !prefs.clickLaunchesNew) {
@@ -486,7 +501,12 @@ Item {
       return [{ label: "Remove from folder", action: "unfolder" },
               { label: "Launch", action: "launch" }]
     var items = []
-    if (root.isRunning(entry)) items.push({ label: "New window", action: "new-window" })
+    // The desktop file's own extras (New Private Window, Compose, ...).
+    var extras = entry.actions || []
+    var ownNewWindow = extras.some(function(a) { return /^new window$/i.test(String(a.name)) })
+    if (root.isRunning(entry) && !ownNewWindow) items.push({ label: "New window", action: "new-window" })
+    for (var i = 0; i < extras.length; i++)
+      items.push({ label: String(extras[i].name), action: "desktop:" + i })
     items.push(
       { label: root.isFavourite(id) ? "Unpin from favourites" : "Pin to favourites", action: "favourite" },
       { label: root.isHidden(id) ? "Show in launcher" : "Hide from launcher", action: "hide" })
@@ -497,6 +517,7 @@ Item {
   }
 
   function openMenu(entry, scenePos, context) {
+    if (entry && entry.isWindow) return
     root.menuEntry = entry
     root.menuContext = context || "grid"
     root.menuArmed = false
@@ -512,6 +533,13 @@ Item {
     var entry = root.menuEntry
     if (!entry) return
     var id = String(entry.id)
+    if (action.indexOf("desktop:") === 0) {
+      var extra = (entry.actions || [])[Number(action.slice(8))]
+      // ponytail: runs straight from the shell, not through appLibrary.launch (no uwsm scope).
+      if (extra) extra.execute()
+      root.requestClose()
+      return
+    }
     switch (action) {
     case "open":
       root.openFolderId = id
@@ -800,7 +828,7 @@ Item {
   }
 
   function isRunning(entry) {
-    return !!entry && !entry.isFolder && !!root.runningWindows[String(entry.id)]
+    return !!entry && (entry.isWindow || !entry.isFolder && !!root.runningWindows[String(entry.id)])
   }
 
   function focusWindow(toplevel) {
