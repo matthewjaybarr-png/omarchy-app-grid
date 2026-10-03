@@ -196,6 +196,7 @@ Item {
     root.refreshApps()
     root.refreshWindows()
     root.stripHint = ""
+    root.closeMenu()
   }
 
   function pickScreen() {
@@ -303,6 +304,9 @@ Item {
       property var folders: []
       // Workspace strip shown as cards with each workspace's windows.
       property bool overviewExpanded: false
+      // Clicking an app that's already open launches another copy instead
+      // of switching to it.
+      property bool clickLaunchesNew: false
     }
   }
 
@@ -437,13 +441,23 @@ Item {
     }
   }
 
-  function launch(index) {
-    root.launchEntry(root.apps[index])
+  function launch(index, fresh) {
+    root.launchEntry(root.apps[index], fresh)
   }
 
-  function launchEntry(entry) {
+  function wantsFresh(mouse) {
+    return mouse.button === Qt.MiddleButton || (mouse.modifiers & Qt.ControlModifier) !== 0
+  }
+
+  // `fresh` (middle-click, Ctrl+click, Ctrl+Enter) always starts a new copy.
+  function launchEntry(entry, fresh) {
     if (entry && entry.isFolder) { root.openFolderId = String(entry.id); return }
     if (!entry || !root.appLibrary) return
+    var windows = root.runningWindows[String(entry.id)]
+    if (windows && !fresh && !prefs.clickLaunchesNew) {
+      root.focusWindow(windows[0])
+      return
+    }
     root.appLibrary.launch(entry.id, root.appLibrary.entryName(entry))
     root.requestClose()
   }
@@ -459,16 +473,23 @@ Item {
     var entry = root.menuEntry
     if (!entry) return []
     var id = String(entry.id)
+    if (entry.isSettings) {
+      var fresh = prefs.clickLaunchesNew === true
+      // What a click on an app that's already open does.
+      return [{ label: (fresh ? "   " : "✓  ") + "Switch to open apps", action: "click-switch" },
+              { label: (fresh ? "✓  " : "   ") + "Always open new windows", action: "click-new" }]
+    }
     if (entry.isFolder)
       return [{ label: "Open", action: "open" },
               { label: "Ungroup folder", action: "ungroup" }]
     if (root.menuContext === "folder")
       return [{ label: "Remove from folder", action: "unfolder" },
               { label: "Launch", action: "launch" }]
-    var items = [
+    var items = []
+    if (root.isRunning(entry)) items.push({ label: "New window", action: "new-window" })
+    items.push(
       { label: root.isFavourite(id) ? "Unpin from favourites" : "Pin to favourites", action: "favourite" },
-      { label: root.isHidden(id) ? "Show in launcher" : "Hide from launcher", action: "hide" }
-    ]
+      { label: root.isHidden(id) ? "Show in launcher" : "Hide from launcher", action: "hide" })
     items.push(root.menuArmed
       ? { label: "Really uninstall?", action: "uninstall", danger: true }
       : { label: "Uninstall…", action: "arm", danger: true })
@@ -504,6 +525,13 @@ Item {
     case "launch":
       root.launchEntry(entry)
       return
+    case "new-window":
+      root.launchEntry(entry, true)
+      return
+    case "click-switch":
+    case "click-new":
+      prefs.clickLaunchesNew = action === "click-new"
+      break
     case "favourite":
       root.setFavourite(id, !root.isFavourite(id))
       break
@@ -751,6 +779,28 @@ Item {
     var titles = root.workspaceWindows(root.workspaceById(id)).map(root.windowTitle)
     var label = "Workspace " + (id === 10 ? "0" : String(id))
     return titles.length > 0 ? label + ": " + titles.join("  ·  ") : label + " (empty)"
+  }
+
+  // Desktop entry id -> its open windows, most recently focused first.
+  readonly property var runningWindows: {
+    var byId = ({})
+    var all = Hyprland.toplevels.values
+    for (var i = 0; i < all.length; i++) {
+      var entry = root.windowEntry(all[i])
+      if (!entry) continue
+      var id = String(entry.id)
+      ;(byId[id] = byId[id] || []).push(all[i])
+    }
+    function recency(t) {
+      var h = t.lastIpcObject ? t.lastIpcObject.focusHistoryID : undefined
+      return h === undefined ? 1e9 : h
+    }
+    for (var key in byId) byId[key].sort(function(a, b) { return recency(a) - recency(b) })
+    return byId
+  }
+
+  function isRunning(entry) {
+    return !!entry && !entry.isFolder && !!root.runningWindows[String(entry.id)]
   }
 
   function focusWindow(toplevel) {
@@ -1188,7 +1238,13 @@ Item {
 
     MouseArea {
       anchors.fill: parent
-      onClicked: root.requestClose()
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      onClicked: function(mouse) {
+        if (mouse.button === Qt.RightButton)
+          root.openMenu({ id: "settings", isSettings: true }, Qt.point(mouse.x, mouse.y))
+        else
+          root.requestClose()
+      }
     }
 
     Item {
@@ -1269,7 +1325,8 @@ Item {
               break
             case Qt.Key_Return:
             case Qt.Key_Enter:
-              root.launch(root.selectedIndex >= 0 ? root.selectedIndex : 0)
+              root.launch(root.selectedIndex >= 0 ? root.selectedIndex : 0,
+                          (event.modifiers & Qt.ControlModifier) !== 0)
               break
             case Qt.Key_Left: root.moveSelection(-1, 0); break
             case Qt.Key_Right: root.moveSelection(1, 0); break
@@ -1690,11 +1747,22 @@ Item {
                 Behavior on scale { NumberAnimation { duration: 90 } }
               }
 
+              Rectangle {
+                visible: root.isRunning(favourite.modelData)
+                width: Style.space(5)
+                height: width
+                radius: width / 2
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Style.space(1)
+                color: Color.accent
+              }
+
               MouseArea {
                 id: favHover
                 anchors.fill: parent
                 hoverEnabled: true
-                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
                 property point pressScene
                 property bool candidate: false
                 property bool moved: false
@@ -1725,7 +1793,7 @@ Item {
                   if (mouse.button === Qt.RightButton)
                     root.openMenu(favourite.modelData, favourite.mapToItem(null, mouse.x, mouse.y))
                   else
-                    root.launchEntry(favourite.modelData)
+                    root.launchEntry(favourite.modelData, root.wantsFresh(mouse))
                 }
               }
             }
@@ -1893,13 +1961,13 @@ Item {
                 id: memberHover
                 anchors.fill: parent
                 hoverEnabled: true
-                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
                 onClicked: function(mouse) {
                   if (mouse.button === Qt.RightButton)
                     root.openMenu(member.modelData,
                                   member.mapToItem(null, mouse.x, mouse.y), "folder")
                   else
-                    root.launchEntry(member.modelData)
+                    root.launchEntry(member.modelData, root.wantsFresh(mouse))
                 }
               }
             }
@@ -2069,6 +2137,17 @@ Item {
       }
     }
 
+    // Open-app dot, in the gap between icon and label.
+    Rectangle {
+      visible: root.isRunning(tile.entry)
+      width: Style.space(5)
+      height: width
+      radius: width / 2
+      anchors.horizontalCenter: parent.horizontalCenter
+      y: art.y + art.height + Style.space(2)
+      color: Color.accent
+    }
+
     Text {
       textFormat: Text.PlainText
       anchors.top: art.bottom
@@ -2088,7 +2167,7 @@ Item {
       id: hover
       anchors.fill: parent
       hoverEnabled: true
-      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
       property point pressScene
       property bool candidate: false
       property bool moved: false
@@ -2120,7 +2199,7 @@ Item {
         if (mouse.button === Qt.RightButton)
           root.openMenu(tile.entry, tile.mapToItem(null, mouse.x, mouse.y))
         else
-          root.launch(tile.globalIndex)
+          root.launch(tile.globalIndex, root.wantsFresh(mouse))
       }
     }
   }
