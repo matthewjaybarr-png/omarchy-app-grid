@@ -831,11 +831,29 @@ Item {
     return !!entry && (entry.isWindow || !entry.isFolder && !!root.runningWindows[String(entry.id)])
   }
 
-  function focusWindow(toplevel) {
+  // HyprlandToplevel.address comes without the 0x the dispatcher wants.
+  function windowSelector(toplevel) {
     var address = String((toplevel && toplevel.address) || "")
-    if (address.length === 0) return
-    if (address.indexOf("0x") !== 0) address = "0x" + address
-    root.afterClose('hl.dsp.focus({ window = "address:' + address + '" })')
+    if (address.length === 0) return ""
+    return 'window = "address:' + (address.indexOf("0x") === 0 ? "" : "0x") + address + '"'
+  }
+
+  function focusWindow(toplevel) {
+    var selector = root.windowSelector(toplevel)
+    if (selector) root.afterClose('hl.dsp.focus({ ' + selector + ' })')
+  }
+
+  // Moving or closing another window leaves the current workspace alone, so
+  // these dispatch straight away and the grid stays up; rawEvent redraws the
+  // cards. Close is the polite one, so an unsaved editor still asks.
+  function moveWindow(toplevel, id) {
+    var selector = root.windowSelector(toplevel)
+    if (selector) Hyprland.dispatch('hl.dsp.window.move({ ' + selector + ', workspace = "' + id + '", follow = false })')
+  }
+
+  function closeWindow(toplevel) {
+    var selector = root.windowSelector(toplevel)
+    if (selector) Hyprland.dispatch('hl.dsp.window.close({ ' + selector + ' })')
   }
 
   property string pendingDispatch: ""
@@ -1008,7 +1026,7 @@ Item {
   // ---- drag to reorder ----
 
   property bool dragActive: false
-  property string dragSource: ""    // "grid" | "dash"
+  property string dragSource: ""    // "grid" | "dash" | "window"
   property int dragFrom: -1         // index into apps (grid) or favouriteEntries (dash)
   property int dashFrom: -1         // the dragged app's current place in the dash, -1 if unpinned
   property int dropIndex: -1
@@ -1107,9 +1125,28 @@ Item {
     root.updateDrag(scene)
   }
 
+  // A window box out of a workspace card. Kept apart from beginDrag: plenty
+  // of windows have no desktop entry, and only the strip is a drop target.
+  function beginWindowDrag(toplevel, scene) {
+    root.dragSource = "window"
+    root.dragItem = toplevel
+    root.dragIcon = root.windowIcon(toplevel)
+    root.dragIconSize = Style.space(40)
+    root.dragGrab = Qt.point(root.dragIconSize / 2, root.dragIconSize / 2)
+    root.dragActive = true
+    root.closeMenu()
+    root.updateDrag(scene)
+  }
+
   function updateDrag(scene) {
     if (!root.dragActive) return
     root.dragPos = scene
+    if (root.dragSource === "window") {
+      var id = root.workspaceIdAt(scene)
+      var own = root.dragItem && root.dragItem.workspace ? root.dragItem.workspace.id : -1
+      root.dropWorkspace = id === own ? -1 : id
+      return
+    }
     var dragged = root.dragSource === "grid" ? root.apps[root.dragFrom] : null
     // Over the strip, everything else stands still: no reflow, no fold, no
     // page flip. A folder has nothing to launch, so it isn't a candidate.
@@ -1175,7 +1212,9 @@ Item {
 
   function endDrag() {
     if (!root.dragActive) return
-    if (root.dropWorkspace > 0) {
+    if (root.dragSource === "window") {
+      if (root.dropWorkspace > 0) root.moveWindow(root.dragItem, root.dropWorkspace)
+    } else if (root.dropWorkspace > 0) {
       root.launchOnWorkspace(root.dragItem, root.dropWorkspace)
     } else if (root.folderTarget >= 0 && !root.dropOnDash) {
       root.makeFolder(root.dragFrom, root.folderTarget)
@@ -1511,6 +1550,7 @@ Item {
                   readonly property var ipc: modelData.lastIpcObject || ({})
                   readonly property bool placed: !!ipc.at && !!ipc.size
                   readonly property bool hovered: boxMouse.containsMouse
+                  readonly property bool dragged: root.dragActive && root.dragItem === modelData
                   // Until Hyprland reports geometry, fill the card rather than
                   // stacking every window in the corner.
                   x: placed ? (ipc.at[0] - root.screenX) * miniScreen.ratio : 0
@@ -1521,6 +1561,11 @@ Item {
                   color: Util.alpha(Color.foreground, hovered ? 0.22 : 0.12)
                   border.width: 1
                   border.color: hovered ? Color.accent : Util.alpha(Color.foreground, 0.28)
+                  // Not visible:false, which would drop the drag's grab.
+                  opacity: dragged ? 0.35 : 1
+                  // A refresh mid-drag rebuilds the boxes and takes the grab
+                  // with it; end the drag rather than leave it stuck.
+                  Component.onDestruction: if (dragged) root.cancelDrag()
 
                   // Live picture of the window. Capture only runs while the
                   // cards are actually on screen; otherwise the source is
@@ -1554,11 +1599,69 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.focusWindow(windowBox.modelData)
+                    acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                    property point pressScene
+                    property bool candidate: false
+                    property bool moved: false
+                    readonly property string hint: root.windowTitle(windowBox.modelData)
+                      + "  ·  drag to move, middle-click to close"
+
+                    onPressed: function(mouse) {
+                      boxMouse.moved = false
+                      boxMouse.candidate = mouse.button === Qt.LeftButton
+                      boxMouse.pressScene = windowBox.mapToItem(null, mouse.x, mouse.y)
+                    }
+                    onPositionChanged: function(mouse) {
+                      if (!boxMouse.pressed) return
+                      var scene = windowBox.mapToItem(null, mouse.x, mouse.y)
+                      if (!root.dragActive) {
+                        if (!boxMouse.candidate) return
+                        var dx = scene.x - boxMouse.pressScene.x
+                        var dy = scene.y - boxMouse.pressScene.y
+                        if (dx * dx + dy * dy < root.dragThreshold * root.dragThreshold) return
+                        boxMouse.moved = true
+                        root.beginWindowDrag(windowBox.modelData, scene)
+                      }
+                      root.updateDrag(scene)
+                    }
+                    onReleased: if (root.dragActive) root.endDrag()
+                    onCanceled: root.cancelDrag()
+                    onClicked: function(mouse) {
+                      if (boxMouse.moved) return
+                      if (mouse.button === Qt.MiddleButton) root.closeWindow(windowBox.modelData)
+                      else root.focusWindow(windowBox.modelData)
+                    }
                     onContainsMouseChanged: {
-                      var title = root.windowTitle(windowBox.modelData)
-                      if (containsMouse) root.stripHint = title
-                      else if (root.stripHint === title) root.stripHint = ""
+                      if (containsMouse) root.stripHint = boxMouse.hint
+                      else if (root.stripHint === boxMouse.hint) root.stripHint = ""
+                    }
+
+                    // Inside boxMouse so hovering it still counts as hovering the box.
+                    Rectangle {
+                      anchors.right: parent.right
+                      anchors.top: parent.top
+                      anchors.margins: Style.space(2)
+                      width: Style.space(14)
+                      height: width
+                      radius: width / 2
+                      visible: windowBox.hovered && !root.dragActive && windowBox.width >= Style.space(28)
+                      color: closeMouse.containsMouse ? Color.accent : Util.alpha(Color.background, 0.8)
+
+                      Text {
+                        textFormat: Text.PlainText
+                        anchors.centerIn: parent
+                        text: "×"
+                        color: closeMouse.containsMouse ? Color.background : Color.foreground
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                      }
+                      MouseArea {
+                        id: closeMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.closeWindow(windowBox.modelData)
+                      }
                     }
                   }
                 }
