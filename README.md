@@ -5,7 +5,7 @@ as an omarchy-shell plugin. Paged icons, search, a favourites dash, folders,
 drag to reorder, and a workspace overview with live window previews — opened
 with a key or a 3-finger swipe up that follows your fingers the whole way.
 
-![The app grid open over the wallpaper](preview.png)
+![The app grid open over the wallpaper, with the workspace cards expanded](preview.png)
 
 Built against Omarchy 4.0.4 (Hyprland 0.56.2, Quickshell 0.3.1).
 
@@ -79,7 +79,10 @@ workspaces, with the icons of the apps open on each. Click a pill or press
 Click the chevron at the end of the strip (or `Ctrl+Down`; `Ctrl+Up` folds it)
 to open the pills into cards that show each workspace's windows where they sit,
 with live previews. Hover a window for its title, click it to jump straight to
-it. Previews only run while the cards are open; folded, the strip costs
+it. Drag a window onto another card to move it there; middle-click it (or
+hover and click its ×) to close it. Closing asks the app nicely, so one with
+unsaved work shows its own save prompt — behind the grid, until you dismiss
+the grid. Previews only run while the cards are open; folded, the strip costs
 nothing.
 
 Everything you arrange lives in
