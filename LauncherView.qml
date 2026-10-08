@@ -1620,6 +1620,7 @@ Item {
                         var dy = scene.y - boxMouse.pressScene.y
                         if (dx * dx + dy * dy < root.dragThreshold * root.dragThreshold) return
                         boxMouse.moved = true
+                        boxMouse.candidate = false   // one drag per press: Escape mustn't re-arm it
                         root.beginWindowDrag(windowBox.modelData, scene)
                       }
                       root.updateDrag(scene)
@@ -1912,6 +1913,7 @@ Item {
                     var dy = scene.y - favHover.pressScene.y
                     if (dx * dx + dy * dy < root.dragThreshold * root.dragThreshold) return
                     favHover.moved = true
+                    favHover.candidate = false
                     root.beginDrag("dash", favourite.index, favourite.modelData,
                                    favIcon, favHover.pressScene)
                   }
@@ -2318,6 +2320,7 @@ Item {
           var dy = scene.y - hover.pressScene.y
           if (dx * dx + dy * dy < root.dragThreshold * root.dragThreshold) return
           hover.moved = true
+          hover.candidate = false
           root.beginDrag("grid", tile.globalIndex, tile.entry, art, hover.pressScene)
         }
         root.updateDrag(scene)
