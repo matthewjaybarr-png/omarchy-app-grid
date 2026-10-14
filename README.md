@@ -85,6 +85,11 @@ unsaved work shows its own save prompt — behind the grid, until you dismiss
 the grid. Previews only run while the cards are open; folded, the strip costs
 nothing.
 
+From the keyboard, press `Up` from the grid's top row to enter the strip: `Left`/`Right`
+pick a workspace, `Tab` steps through its windows, `Enter` switches,
+`Shift+Left`/`Right` moves the window, `Delete` closes it, `Down` or `Escape` goes
+back. Typing still searches.
+
 Everything you arrange lives in
 `~/.local/state/omarchy/omarchy-app-grid.json` — favourites, hidden apps,
 grid order, folders, and the two preferences above. Delete it to start over.

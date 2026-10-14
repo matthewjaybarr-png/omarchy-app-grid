@@ -133,6 +133,7 @@ Item {
       menu: root.menuEntry ? String(root.menuEntry.id) : null,
       menuArmed: root.menuArmed,
       searchFocus: searchInput.activeFocus,
+      zone: root.zone, stripWs: root.stripWs, stripWindow: root.stripWindow,
       drag: root.dragActive
         ? { source: root.dragSource, id: root.dragId, from: root.dragFrom,
             drop: root.dropIndex, dash: root.dropOnDash ? root.dashDropIndex : -1,
@@ -196,6 +197,7 @@ Item {
     root.refreshApps()
     root.refreshWindows()
     root.stripHint = ""
+    root.zone = "grid"
     root.closeMenu()
   }
 
@@ -440,6 +442,7 @@ Item {
     root.refreshApps()
     root.page = 0
     root.selectedIndex = root.query.length > 0 && root.apps.length > 0 ? 0 : -1
+    if (root.zone === "strip") root.stripLeave()
   }
 
   onInteractiveChanged: if (interactive) Qt.callLater(function() { searchInput.forceActiveFocus() })
@@ -854,6 +857,114 @@ Item {
   function closeWindow(toplevel) {
     var selector = root.windowSelector(toplevel)
     if (selector) Hyprland.dispatch('hl.dsp.window.close({ ' + selector + ' })')
+  }
+
+  // ---- keyboard in the workspace strip ----
+  //
+  // Real focus stays in the search field, so typing always searches; `zone`
+  // only decides where the arrow keys go. The selection is a workspace id plus
+  // a window address ("" = the card itself), never an index: cards rebuild on
+  // every window change.
+
+  property string zone: "grid"
+  property int stripWs: 0
+  property string stripWindow: ""
+
+  function stripWindows() { return root.workspaceWindows(root.workspaceById(root.stripWs)) }
+
+  // Looked up among all windows, not just this card's: a window that was just
+  // moved is still listed under its old workspace until Hyprland reports it.
+  function stripToplevel() {
+    if (root.stripWindow === "") return null
+    var all = Hyprland.toplevels.values
+    for (var i = 0; i < all.length; i++)
+      if (String(all[i].address) === root.stripWindow) return all[i]
+    return null
+  }
+
+  // Run before every strip key: a workspace that's gone falls back to the
+  // focused one, a window that's gone to the card.
+  function stripValidate() {
+    var ids = root.workspaceIds()
+    if (ids.indexOf(root.stripWs) < 0) {
+      var focused = Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : 0
+      root.stripWs = ids.indexOf(focused) >= 0 ? focused : ids[0]
+      root.stripWindow = ""
+    }
+    if (!root.stripToplevel()) root.stripWindow = ""
+    return ids
+  }
+
+  function stripSelect(ws, address) {
+    root.stripWs = ws
+    root.stripWindow = address
+    var t = root.stripToplevel()
+    root.stripHint = t
+      ? root.windowTitle(t) + "  ·  Enter to switch, Delete to close, Shift+Left/Right to move"
+      : root.workspaceHint(ws)
+  }
+
+  function stripEnter() {
+    if (root.dragActive || root.menuEntry || root.openFolderId !== "") return false
+    root.zone = "strip"
+    root.stripWs = 0
+    root.stripWindow = ""
+    root.stripValidate()
+    root.stripSelect(root.stripWs, "")
+    return true
+  }
+
+  function stripLeave() {
+    root.zone = "grid"
+    root.stripHint = ""
+  }
+
+  function stripStep(dx) {
+    if (root.dragActive) return
+    var ids = root.stripValidate()
+    var i = Math.max(0, Math.min(ids.length - 1, ids.indexOf(root.stripWs) + dx))
+    root.stripSelect(ids[i], "")
+  }
+
+  // The card, then its windows, wrapping. Collapsed there are no windows to
+  // pick, so it's just Right/Left.
+  function stripCycle(dir) {
+    if (root.dragActive) return
+    if (!root.stripExpanded) { root.stripStep(dir); return }
+    root.stripValidate()
+    var seq = [""].concat(root.stripWindows().map(function(t) { return String(t.address) }))
+    var at = seq.indexOf(root.stripWindow)
+    root.stripSelect(root.stripWs, seq[(at + dir + seq.length) % seq.length])
+  }
+
+  function stripShift(dx) {
+    if (root.dragActive) return
+    var ids = root.stripValidate()
+    var t = root.stripToplevel()
+    var j = ids.indexOf(root.stripWs) + dx
+    if (!t || j < 0 || j >= ids.length) return
+    root.moveWindow(t, ids[j])
+    root.stripSelect(ids[j], root.stripWindow)
+  }
+
+  function stripClose() {
+    if (root.dragActive) return
+    root.stripValidate()
+    var t = root.stripToplevel()
+    if (!t) return
+    var list = root.stripWindows().map(function(w) { return String(w.address) })
+    var i = list.indexOf(root.stripWindow)
+    var next = i < 0 ? "" : list[i + 1] || list[i - 1] || ""
+    root.stripSelect(root.stripWs, next)
+    root.closeWindow(t)
+  }
+
+  function stripActivate() {
+    if (root.dragActive) return
+    root.stripValidate()
+    var t = root.stripToplevel()
+    if (t) root.focusWindow(t)
+    else root.focusWorkspace(root.stripWs)
   }
 
   property string pendingDispatch: ""
@@ -1382,11 +1493,31 @@ Item {
               event.accepted = true
               return
             }
+            if (root.zone === "strip") {
+              var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+              var handled = true
+              switch (event.key) {
+              case Qt.Key_Left: if (shift) root.stripShift(-1); else root.stripStep(-1); break
+              case Qt.Key_Right: if (shift) root.stripShift(1); else root.stripStep(1); break
+              case Qt.Key_Tab: root.stripCycle(1); break
+              case Qt.Key_Backtab: root.stripCycle(-1); break
+              case Qt.Key_Return:
+              case Qt.Key_Enter: root.stripActivate(); break
+              case Qt.Key_Delete: root.stripClose(); break
+              case Qt.Key_Up: break
+              case Qt.Key_Down:
+                if (!root.dragActive) { root.stripLeave(); root.moveSelection(0, 0) }
+                break
+              default: handled = false
+              }
+              if (handled) { event.accepted = true; return }
+            }
             switch (event.key) {
             case Qt.Key_Escape:
               if (root.dragActive) root.cancelDrag()
               else if (root.menuEntry) root.closeMenu()
               else if (root.openFolderId !== "") root.openFolderId = ""
+              else if (root.zone === "strip") root.stripLeave()
               else if (root.query.length > 0) root.query = ""
               else root.requestClose()
               break
@@ -1397,7 +1528,12 @@ Item {
               break
             case Qt.Key_Left: root.moveSelection(-1, 0); break
             case Qt.Key_Right: root.moveSelection(1, 0); break
-            case Qt.Key_Up: root.moveSelection(0, -1); break
+            case Qt.Key_Up:
+              // From the top row (or with nothing selected) Up climbs into the strip.
+              if ((root.selectedIndex < 0 || root.selectedIndex % root.perPage < root.columns)
+                  && root.stripEnter()) break
+              root.moveSelection(0, -1)
+              break
             case Qt.Key_Down: root.moveSelection(0, 1); break
             case Qt.Key_Tab: root.moveSelection(1, 0); break
             case Qt.Key_Backtab: root.moveSelection(-1, 0); break
@@ -1435,6 +1571,8 @@ Item {
             readonly property string label: modelData === 10 ? "0" : String(modelData)
             id: pill
             readonly property bool hovered: pillMouse.containsMouse
+            readonly property bool keySelected: root.zone === "strip" && root.stripWs === modelData
+              && (root.stripWindow === "" || !root.stripExpanded)
             readonly property bool dropTarget: root.dragActive && root.dropWorkspace === pill.modelData
             readonly property int iconLimit: 3
             width: root.stripExpanded ? root.cardWidth
@@ -1451,8 +1589,8 @@ Item {
               : pill.focused ? Util.alpha(Color.accent, 0.75)
               : pill.occupied ? Util.alpha(Color.foreground, pill.hovered ? 0.34 : 0.24)
               : pill.hovered ? Util.alpha(Color.foreground, 0.12) : "transparent"
-            border.width: pill.dropTarget || (root.stripExpanded && pill.focused) ? 2 : 1
-            border.color: pill.dropTarget ? Color.accent
+            border.width: pill.dropTarget || pill.keySelected || (root.stripExpanded && pill.focused) ? 2 : 1
+            border.color: pill.dropTarget || pill.keySelected ? Color.accent
               : root.stripExpanded && pill.focused ? Util.alpha(Color.accent, 0.9)
               : Util.alpha(Color.foreground,
                   pill.focused ? 0.45 : pill.occupied ? 0.3 : 0.16)
@@ -1550,6 +1688,8 @@ Item {
                   readonly property var ipc: modelData.lastIpcObject || ({})
                   readonly property bool placed: !!ipc.at && !!ipc.size
                   readonly property bool hovered: boxMouse.containsMouse
+                  readonly property bool keySelected: root.zone === "strip" && root.stripExpanded
+                    && root.stripWindow === String(modelData.address)
                   readonly property bool dragged: root.dragActive && root.dragItem === modelData
                   // Until Hyprland reports geometry, fill the card rather than
                   // stacking every window in the corner.
@@ -1559,8 +1699,8 @@ Item {
                   height: placed ? Math.max(4, ipc.size[1] * miniScreen.ratio) : miniScreen.height
                   radius: Style.space(3)
                   color: Util.alpha(Color.foreground, hovered ? 0.22 : 0.12)
-                  border.width: 1
-                  border.color: hovered ? Color.accent : Util.alpha(Color.foreground, 0.28)
+                  border.width: keySelected ? 2 : 1
+                  border.color: hovered || keySelected ? Color.accent : Util.alpha(Color.foreground, 0.28)
                   // Not visible:false, which would drop the drag's grab.
                   opacity: dragged ? 0.35 : 1
                   // A refresh mid-drag rebuilds the boxes and takes the grab
@@ -1645,7 +1785,7 @@ Item {
                       width: Style.space(14)
                       height: width
                       radius: width / 2
-                      visible: windowBox.hovered && !root.dragActive && windowBox.width >= Style.space(28)
+                      visible: (windowBox.hovered || windowBox.keySelected) && !root.dragActive && windowBox.width >= Style.space(28)
                       color: closeMouse.containsMouse ? Color.accent : Util.alpha(Color.background, 0.8)
 
                       Text {
@@ -2184,7 +2324,7 @@ Item {
     readonly property bool foldTarget: root.dragActive && root.folderTarget === tile.globalIndex
     readonly property bool dragged: root.dragActive && root.dragSource === "grid"
       && tile.globalIndex === root.dragFrom
-    readonly property bool selected: root.selectedIndex === globalIndex
+    readonly property bool selected: root.selectedIndex === globalIndex && root.zone === "grid"
     // Hidden apps only ever appear here via search; dimmed, to say why they
     // are not in the grid.
     readonly property bool dimmed: tile.entry ? root.isHidden(tile.entry.id) : false
