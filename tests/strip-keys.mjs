@@ -96,6 +96,15 @@ const sel = r => [r.stripWs, r.stripWindow]
   p.stripValidate(); assert.deepEqual(sel(p), [2, "b"]); m.ws = 2; p.stripValidate()
   assert.equal(p.stripMove, "")
 }
+{ // move requested, strip left before it was seen landing, then reselected
+  const w = win("a", 2), { root, log } = setup([w])
+  root.stripEnter(); root.stripCycle(1); root.stripShift(1)
+  root.stripLeave(); w.ws = 3
+  root.stripEnter(); root.stripStep(1); root.stripCycle(1)
+  assert.deepEqual(sel(root), [3, "a"])
+  w.ws = 7; root.stripClose()
+  assert.equal(log.length, 1, "closed a window that left the strip on stale protection")
+}
 { // opening a menu or folder leaves the strip (real handler bodies)
   const run = name => {
     const at = qml.indexOf(`  ${name}:`), end = qml.indexOf("\n\n", at)

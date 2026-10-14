@@ -914,6 +914,8 @@ Item {
   }
 
   function stripSelect(ws, address) {
+    // Pending-move protection belongs to one selection; any other clears it.
+    if (address !== root.stripWindow) root.stripMove = ""
     root.stripWs = ws
     root.stripWindow = address
     var t = root.stripToplevel()
@@ -934,6 +936,7 @@ Item {
 
   function stripLeave() {
     root.zone = "grid"
+    root.stripMove = ""
     root.stripHint = ""
   }
 
