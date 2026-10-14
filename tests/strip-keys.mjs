@@ -17,12 +17,12 @@ function fn(name) {
   throw new Error(`${name}: unbalanced braces`)
 }
 
-const win = (address, ws) => ({ address, title: "t" + address, ws })
+const win = (address, ws) => ({ address, title: "t" + address, ws, get workspace() { return { id: this.ws } } })
 function setup(windows, expanded = true, ids = [1, 2, 3]) {
   const Hyprland = { toplevels: { values: windows }, focusedWorkspace: { id: 2 } }
   const log = []
   const root = {
-    zone: "grid", stripWs: 0, stripWindow: "", stripHint: "", stripExpanded: expanded,
+    zone: "grid", stripWs: 0, stripWindow: "", stripMove: "", stripHint: "", stripExpanded: expanded,
     dragActive: false, menuEntry: null, openFolderId: "",
     workspaceIds: () => ids,
     workspaceById: id => id,
@@ -63,6 +63,7 @@ const sel = r => [r.stripWs, r.stripWindow]
   assert.deepEqual(log, [["move", "a", 3], ["move", "a", 2]])
   root.stripShift(-1); root.stripShift(-1); root.stripShift(-1)
   assert.deepEqual(sel(root), [1, "a"], "moved past the first id")
+  assert.equal(root.stripWindow, "a", "pending move lost the selection")
   const card = setup([]).root; card.stripEnter(); card.stripShift(1)
   assert.equal(card.stripWs, 2, "Shift on a card moved something")
 }
@@ -81,5 +82,29 @@ const sel = r => [r.stripWs, r.stripWindow]
   root.stripWs = 9; root.stripStep(0); assert.equal(root.stripWs, 2)
   root.dragActive = true; root.stripStep(1); assert.equal(root.stripWs, 2)
   root.stripActivate(); assert.equal(log.length, 1)
+}
+{ // moved from outside: selection follows the window, or drops if it left the strip
+  const w = win("a", 2), { root, log } = setup([w])
+  root.stripEnter(); root.stripCycle(1)
+  w.ws = 3; root.stripClose(); assert.deepEqual(log, [["close", "a"]])
+  assert.equal(root.stripWs, 3, "stayed on the old workspace")
+  root.stripSelect(3, "a"); w.ws = 7; root.stripValidate()
+  assert.equal(root.stripWindow, "", "kept a window that left the strip")
+  // a pending keyboard move survives validation, and clears once it lands
+  const m = win("b", 1), p = setup([m]).root
+  p.stripEnter(); p.stripWs = 1; p.stripSelect(1, "b"); p.stripShift(1)
+  p.stripValidate(); assert.deepEqual(sel(p), [2, "b"]); m.ws = 2; p.stripValidate()
+  assert.equal(p.stripMove, "")
+}
+{ // opening a menu or folder leaves the strip (real handler bodies)
+  const run = name => {
+    const at = qml.indexOf(`  ${name}:`), end = qml.indexOf("\n\n", at)
+    return new Function("root", "searchInput", qml.slice(at, end).replace(`${name}:`, ""))
+  }
+  for (const [name, set] of [["onMenuEntryChanged", r => r.menuEntry = {}], ["onOpenFolderIdChanged", r => r.openFolderId = "f"]]) {
+    const { root } = setup([]); root.stripEnter()
+    set(root); run(name)(root, { forceActiveFocus() {} })
+    assert.equal(root.zone, "grid", `${name} left the strip open`)
+  }
 }
 console.log("ok strip-keys")

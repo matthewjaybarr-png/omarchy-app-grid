@@ -447,7 +447,13 @@ Item {
 
   onInteractiveChanged: if (interactive) Qt.callLater(function() { searchInput.forceActiveFocus() })
 
-  onOpenFolderIdChanged: if (root.openFolderId === "") searchInput.forceActiveFocus()
+  onOpenFolderIdChanged: {
+    if (root.openFolderId === "") searchInput.forceActiveFocus()
+    else if (root.zone === "strip") root.stripLeave()
+  }
+
+  // A menu or folder owns the keys; strip keys must not act behind it.
+  onMenuEntryChanged: if (root.menuEntry && root.zone === "strip") root.stripLeave()
 
   Connections {
     target: root.appLibrary
@@ -869,6 +875,10 @@ Item {
   property string zone: "grid"
   property int stripWs: 0
   property string stripWindow: ""
+  // Address of a window a Shift+arrow just moved, until Hyprland reports it
+  // on the new workspace. ponytail: stays set if the move never lands; the
+  // next Delete/Enter then acts on that window's real workspace, harmlessly.
+  property string stripMove: ""
 
   function stripWindows() { return root.workspaceWindows(root.workspaceById(root.stripWs)) }
 
@@ -891,7 +901,15 @@ Item {
       root.stripWs = ids.indexOf(focused) >= 0 ? focused : ids[0]
       root.stripWindow = ""
     }
-    if (!root.stripToplevel()) root.stripWindow = ""
+    var t = root.stripToplevel()
+    var at = t && t.workspace ? t.workspace.id : 0
+    if (!t) root.stripWindow = ""
+    else if (at === root.stripWs) root.stripMove = ""
+    else if (root.stripMove !== root.stripWindow) {
+      // Moved from outside: follow it if the strip shows that workspace.
+      if (ids.indexOf(at) >= 0) root.stripWs = at
+      else root.stripWindow = ""
+    }
     return ids
   }
 
@@ -944,6 +962,7 @@ Item {
     var j = ids.indexOf(root.stripWs) + dx
     if (!t || j < 0 || j >= ids.length) return
     root.moveWindow(t, ids[j])
+    root.stripMove = root.stripWindow
     root.stripSelect(ids[j], root.stripWindow)
   }
 
