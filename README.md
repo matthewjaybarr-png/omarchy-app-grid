@@ -115,10 +115,12 @@ and drop the binding you added.
   which in hicolor is usually the 16x16 PNG and looks mushy at grid size. The
   grid re-indexes PNGs by pixel size and overrides only the names that
   resolved to one.
-- Multi-monitor: the grid follows `Hyprland.focusedMonitor` and the workspace
-  strip lists that monitor's workspaces. Tested with a headless second output
-  (grid, cards, previews and click-to-focus), not yet on two real displays.
-  Reports welcome.
+- Multi-monitor: the grid opens on the focused monitor and the workspace strip
+  stays with it. A headless output to the left at scales 1 and 2 was checked
+  for opening, workspace IDs and reported screen size; a focus change and
+  Ctrl+9 switch were checked at scale 2. Cards, previews and click-to-focus
+  were tested previously with a headless output. No physical second display
+  has been tested. Reports welcome.
 - Live previews use Wayland screencopy. With four windows previewing, the shell
   sat around 12–15% of one core on the test laptop; folded or closed, 0%.
 - `omarchy-shell shell call matthewjaybarr.app-grid debugState x` dumps the

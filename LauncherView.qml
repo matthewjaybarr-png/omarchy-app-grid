@@ -720,11 +720,11 @@ Item {
     return null
   }
 
-  // The grid follows the focused monitor, so the strip does too: a workspace
+  // The strip follows the monitor where the grid opened: a workspace
   // that lives on another monitor isn't this screen's to switch to. Ids that
   // don't exist anywhere yet stay listed -- switching to one creates it here.
   function workspaceIds() {
-    var monitor = Hyprland.focusedMonitor
+    var monitor = root.targetScreen
     var values = Hyprland.workspaces.values
     var ids = []
     var exists = ({})
@@ -990,6 +990,7 @@ Item {
   }
 
   property string pendingDispatch: ""
+  property string pendingMonitor: ""
   property var pendingLaunch: null
 
   // Drop an app on a workspace pill to open it there. There's no need to
@@ -1003,10 +1004,10 @@ Item {
   }
 
   function focusWorkspace(id) {
-    root.afterClose('hl.dsp.focus({ workspace = "' + id + '" })')
+    root.afterClose('hl.dsp.focus({ workspace = "' + id + '" })', root.targetScreen ? root.targetScreen.name : "")
   }
 
-  function afterClose(dispatch) {
+  function afterClose(dispatch, monitor) {
     // Two things bite here. Hyprland's config is Lua, so a bare
     // "workspace 2" is parsed as Lua and dies ("')' expected near '2'") --
     // the dispatcher has to be spelled the way bindings/tiling.lua spells it.
@@ -1014,6 +1015,7 @@ Item {
     // surface refocuses whatever window had focus before, which drags the old
     // workspace back with it.
     root.pendingDispatch = dispatch
+    root.pendingMonitor = monitor || ""
     root.requestClose()
     workspaceSwitch.restart()
   }
@@ -1023,8 +1025,11 @@ Item {
     interval: root.openMs + 60
     onTriggered: {
       if (root.pendingDispatch === "") return
+      if (root.pendingMonitor !== "")
+        Hyprland.dispatch('hl.dsp.focus({ monitor = ' + JSON.stringify(root.pendingMonitor) + ' })')
       Hyprland.dispatch(root.pendingDispatch)
       root.pendingDispatch = ""
+      root.pendingMonitor = ""
       if (root.pendingLaunch) launchAfterSwitch.restart()
     }
   }
