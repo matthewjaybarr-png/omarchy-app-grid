@@ -119,8 +119,9 @@ and drop the binding you added.
   stays with it. A headless output to the left at scales 1 and 2 was checked
   for opening, workspace IDs and reported screen size; a focus change and
   Ctrl+9 switch were checked at scale 2. Cards, previews and click-to-focus
-  were tested previously with a headless output. No physical second display
-  has been tested. Reports welcome.
+  were tested previously with a headless output. The grid was also confirmed
+  to open on the laptop and two physical displays at scale 2; other interactions
+  on those displays have not been verified. Reports welcome.
 - Live previews use Wayland screencopy. With four windows previewing, the shell
   sat around 12–15% of one core on the test laptop; folded or closed, 0%.
 - `omarchy-shell shell call matthewjaybarr.app-grid debugState x` dumps the
