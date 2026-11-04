@@ -116,8 +116,8 @@ and drop the binding you added.
   grid re-indexes PNGs by pixel size and overrides only the names that
   resolved to one.
 - Multi-monitor: the grid opens on the focused monitor and the workspace strip
-  stays with it. A headless output to the left at scales 1 and 2 was checked
-  for opening, workspace IDs and reported screen size; a focus change and
+  stays with it. A headless output to the left, right and above at scales 1
+  and 2 was checked for opening, workspace IDs and reported screen size; a focus change and
   Ctrl+9 switch were checked at scale 2. Cards, previews and click-to-focus
   were tested previously with a headless output. The grid was also confirmed
   to open on the laptop and two physical displays at scale 2; other interactions

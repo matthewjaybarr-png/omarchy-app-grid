@@ -730,7 +730,7 @@ Item {
     var exists = ({})
     for (var i = 0; i < values.length; i++) {
       var ws = values[i]
-      if (ws.id < 1 || ws.id > 10) continue
+      if (ws.id < 1) continue
       exists[ws.id] = true
       // By name: it's the one identifier confirmed to resolve on both
       // objects, and comparing two undefined ids would silently match.
