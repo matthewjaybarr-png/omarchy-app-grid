@@ -117,8 +117,9 @@ and drop the binding you added.
   resolved to one.
 - Multi-monitor: the grid opens on the focused monitor and the workspace strip
   stays with it. A headless output to the left, right and above at scales 1
-  and 2 was checked for opening, workspace IDs and reported screen size; a focus change and
-  Ctrl+9 switch were checked at scale 2. Cards, previews and click-to-focus
+  and 2 was checked for opening, workspace IDs and reported screen size. A focus
+  change and Ctrl+9 switch were checked at scale 2; clicking a window preview
+  and Ctrl+2 were checked on the left at scale 1. Cards, previews and click-to-focus
   were tested previously with a headless output. The grid was also confirmed
   to open on the laptop and two physical displays at scale 2; other interactions
   on those displays have not been verified. Reports welcome.
