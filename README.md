@@ -119,8 +119,10 @@ and drop the binding you added.
   stays with it. A headless output to the left, right and above at scales 1
   and 2 was checked for opening, workspace IDs and reported screen size. A focus
   change and Ctrl+9 switch were checked at scale 2; clicking a window preview
-  and Ctrl+2 were checked on the left at scale 1. Cards, previews and click-to-focus
-  were tested previously with a headless output. The grid was also confirmed
+  and Ctrl+2 were checked on the left at scale 1, along with dragging an app,
+  dropping it and cancelling a drag. A window preview was checked above at
+  scale 2. Cards, previews and click-to-focus were tested previously with a
+  headless output. The grid was also confirmed
   to open on the laptop and two physical displays at scale 2; other interactions
   on those displays have not been verified. Reports welcome.
 - Live previews use Wayland screencopy. With four windows previewing, the shell
