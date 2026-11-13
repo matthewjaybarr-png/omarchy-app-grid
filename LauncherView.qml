@@ -42,14 +42,18 @@ Item {
   property var pngIndex: ({})
   property var pendingPngIndex: ({})
 
+  // Bounded: at most 50,000 paths (a full desktop has ~7,000), and the
+  // Process wraps it in a 10 s deadline.
   function pngScanCommand() {
     return [
       'dirs="$HOME/.icons $HOME/.local/share/icons";',
       'IFS=":"; for d in ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do dirs="$dirs $d/icons"; done; unset IFS;',
-      'for base in $dirs; do',
-      '  [[ -d $base ]] && find "$base" \\( -path "*/apps/*" -o -path "*/devices/*" \\) -name "*.png" 2>/dev/null;',
-      'done;',
-      'find /usr/share/pixmaps -maxdepth 1 -name "*.png" 2>/dev/null'
+      '{',
+      '  for base in $dirs; do',
+      '    [[ -d $base ]] && find "$base" \\( -path "*/apps/*" -o -path "*/devices/*" \\) -name "*.png" 2>/dev/null;',
+      '  done;',
+      '  find /usr/share/pixmaps -maxdepth 1 -name "*.png" 2>/dev/null;',
+      '} | head -n 50000'
     ].join(' ')
   }
 
@@ -83,11 +87,12 @@ Item {
 
   Process {
     id: pngScan
-    command: ["bash", "-c", root.pngScanCommand()]
+    command: ["timeout", "-k", "1", "10", "bash", "-c", root.pngScanCommand()]
     stdout: SplitParser { onRead: function(line) { root.indexPngLine(line) } }
     onStarted: root.pendingPngIndex = ({})
     // Swapping the whole map re-evaluates every iconSource() binding at once.
-    onExited: root.pngIndex = root.pendingPngIndex
+    // A scan that timed out or failed keeps the previous index.
+    onExited: function(code) { if (code === 0) root.pngIndex = root.pendingPngIndex }
   }
 
   // Rescan when Omarchy's own index changes, so a freshly installed app's icon
@@ -1448,26 +1453,41 @@ Item {
   // time limit, so another clipboard owner could stall or bloat the shell.
   // Both text fields paste through wl-paste instead: 64 KiB cap, 3 s deadline;
   // anything over, failed or late is dropped.
+  // Each read carries an id, echoed back by the script; closing the grid or
+  // blurring the field bumps the id, so a late result is never accepted.
   property Item pasteTarget: null
+  property int pasteReq: 0
 
   function pasteInto(input) {
+    if (pasteProc.running) return  // one read at a time; never retarget it
+    root.pasteReq++
     root.pasteTarget = input
-    if (!pasteProc.running) pasteProc.running = true
+    pasteProc.running = true
+  }
+
+  function cancelPaste(input) {
+    if (!root.pasteTarget || (input && input !== root.pasteTarget)) return
+    root.pasteReq++
+    root.pasteTarget = null
+    pasteProc.running = false
   }
 
   function finishPaste(output) {
+    var m = /^(\d+) ok:/.exec(output)
+    if (!m || Number(m[1]) !== root.pasteReq) return
     var input = root.pasteTarget
     root.pasteTarget = null
-    // Stale: the field lost focus or the grid closed while wl-paste ran.
-    if (output.indexOf("ok:") !== 0 || !input || !input.activeFocus || !root.opened) return
+    if (!input || !input.activeFocus || !root.opened) return
     if (input.selectedText.length > 0) input.remove(input.selectionStart, input.selectionEnd)
-    input.insert(input.cursorPosition, output.slice(3).replace(/[\r\n\t]+/g, " "))
+    input.insert(input.cursorPosition, output.slice(m[0].length).replace(/[\r\n\t]+/g, " "))
   }
+
+  onOpenedChanged: if (!opened) root.cancelPaste(null)
 
   Process {
     id: pasteProc
     command: ["bash", "-c", "set -o pipefail; d=$(timeout -k 1 2 wl-paste -n -t text | head -c 65537) || exit 1; "
-      + "LC_ALL=C; [ ${#d} -le 65536 ] || exit 1; printf 'ok:%s' \"$d\""]
+      + "LC_ALL=C; [ ${#d} -le 65536 ] || exit 1; printf '%s ok:%s' \"$1\" \"$d\"", "paste", String(root.pasteReq)]
     stdout: StdioCollector { onStreamFinished: root.finishPaste(text) }
   }
 
@@ -1576,6 +1596,7 @@ Item {
 
           // Middle-click would paste PRIMARY natively, unbounded; swallow it.
           MouseArea { anchors.fill: parent; acceptedButtons: Qt.MiddleButton }
+          onActiveFocusChanged: if (!activeFocus) root.cancelPaste(searchInput)
 
           Keys.onPressed: function(event) {
             if (event.matches(StandardKey.Paste)) {
@@ -2292,6 +2313,7 @@ Item {
             if (event.matches(StandardKey.Paste)) { root.pasteInto(folderName); event.accepted = true }
           }
           MouseArea { anchors.fill: parent; acceptedButtons: Qt.MiddleButton }
+          onActiveFocusChanged: if (!activeFocus) root.cancelPaste(folderName)
         }
 
         Grid {
