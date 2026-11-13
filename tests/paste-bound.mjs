@@ -83,9 +83,39 @@ function setup() {
   assert.ok(pasteProc.running, "blurring another field cancelled the read")
 }
 
-// PNG scan: deadline wrapper, line cap, and a failed scan keeps the old index
-const scan = qml.slice(qml.indexOf("id: pngScan"), qml.indexOf("onExited", qml.indexOf("id: pngScan")) + 120)
-assert.match(scan, /command: \["timeout", "-k", "1", "10", "bash"/)
-assert.match(qml, /\} \| head -n 50000'/)
-assert.match(scan, /onExited: function\(code\) \{ if \(code === 0\) root\.pngIndex/)
+// PNG scan: the real command against fake icon dirs. A complete scan exits 0;
+// hitting the cap or an unreadable dir exits non-zero, which keeps the old index.
+{
+  const a = qml.indexOf("function pngScanCommand"), b = qml.indexOf("].join", a)
+  const scanCmd = [...qml.slice(a, b).matchAll(/^\s*'(.*)',?$/gm)].map(m => m[1].replace(/\\\\/g, "\\")).join(" ")
+  assert.match(qml, /command: \["timeout", "-k", "1", "10", "bash", "-c", root\.pngScanCommand\(\)\]/)
+  assert.match(qml, /onExited: function\(code\) \{ if \(code === 0\) root\.pngIndex/)
+  const home = mkdtempSync(join(tmpdir(), "png-scan-")), apps = join(home, ".icons/hicolor/48x48/apps")
+  const scanRun = (cmd, env = {}) => spawnSync("bash", ["-c", cmd], { env: { ...process.env, HOME: home, XDG_DATA_DIRS: join(home, "none"), ...env }, encoding: "utf8" })
+  try {
+    spawnSync("mkdir", ["-p", apps])
+    for (const n of ["a", "b", "c"]) writeFileSync(join(apps, n + ".png"), "")
+    let r = scanRun(scanCmd); assert.equal(r.status, 0); assert.equal(r.stdout.trim().split("\n").filter(l => l.startsWith(home)).length, 3)
+    r = scanRun(scanCmd.replace("head -n 50000", "head -n 1")); assert.notEqual(r.status, 0, "scan cut off by the cap passed as complete")
+    chmodSync(apps, 0); r = scanRun(scanCmd); chmodSync(apps, 0o755)
+    if (process.getuid() !== 0) assert.notEqual(r.status, 0, "find error passed as complete")
+  } finally { rmSync(home, { recursive: true }) }
+}
+
+// wallpaperProbe: deadline, watchdog, and stream/exit in either order
+{
+  const at = qml.indexOf("id: wallpaperProbe"), probe = qml.slice(at, qml.indexOf("id: wallpaperWatchdog", at))
+  assert.match(probe, /command: \["timeout", "-k", "1", "2", "readlink"/)
+  assert.match(probe, /onExited: function\(exitCode\) \{ wallpaperWatchdog\.stop\(\)/)
+  const settleBody = probe.slice(probe.indexOf("function settle()"), probe.indexOf("\n    }\n", probe.indexOf("function settle()")) + 6)
+  const make = () => { const root = { wallpaperPath: "old" }; const p = { found: null, code: null, root }; p.settle = new Function("p", "root", `with (p) { return ${settleBody} }`)(p, root); return p }  // QML scope: bare names hit the Process
+  for (const [found, code, want] of [["/w.jpg", 0, "/w.jpg"], ["", 0, "old"], ["/w.jpg", 124, "old"], ["x".repeat(5000), 0, "old"]]) {
+    for (const order of [0, 1]) {
+      const p = make()
+      if (order) { p.code = code; p.settle(); assert.equal(p.root.wallpaperPath, "old", "applied before the stream ended"); p.found = found; p.settle() }
+      else { p.found = found; p.settle(); assert.equal(p.root.wallpaperPath, "old", "applied before exit"); p.code = code; p.settle() }
+      assert.equal(p.root.wallpaperPath, want, `found=${found.slice(0, 9)} code=${code}`)
+    }
+  }
+}
 console.log("ok paste-bound")

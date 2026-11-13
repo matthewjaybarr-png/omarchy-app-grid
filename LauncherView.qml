@@ -43,16 +43,19 @@ Item {
   property var pendingPngIndex: ({})
 
   // Bounded: at most 50,000 paths (a full desktop has ~7,000), and the
-  // Process wraps it in a 10 s deadline.
+  // Process wraps it in a 10 s deadline. Any find failure, including being cut
+  // off by head at the cap, fails the whole scan so the old index stays.
   function pngScanCommand() {
     return [
-      'dirs="$HOME/.icons $HOME/.local/share/icons";',
+      'set -o pipefail; dirs="$HOME/.icons $HOME/.local/share/icons";',
       'IFS=":"; for d in ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do dirs="$dirs $d/icons"; done; unset IFS;',
       '{',
+      '  fail=0;',
       '  for base in $dirs; do',
-      '    [[ -d $base ]] && find "$base" \\( -path "*/apps/*" -o -path "*/devices/*" \\) -name "*.png" 2>/dev/null;',
+      '    if [[ -d $base ]]; then find "$base" \\( -path "*/apps/*" -o -path "*/devices/*" \\) -name "*.png" 2>/dev/null || fail=1; fi;',
       '  done;',
-      '  find /usr/share/pixmaps -maxdepth 1 -name "*.png" 2>/dev/null;',
+      '  find /usr/share/pixmaps -maxdepth 1 -name "*.png" 2>/dev/null || fail=1;',
+      '  exit $fail;',
       '} | head -n 50000'
     ].join(' ')
   }
@@ -193,7 +196,7 @@ Item {
   function prepare() {
     root.opened = true
     root.targetScreen = root.pickScreen()
-    wallpaperProbe.running = true
+    root.probeWallpaper()
     root.query = ""
     root.page = 0
     root.selectedIndex = -1
@@ -1440,12 +1443,34 @@ Item {
 
   // ---- wallpaper ----
 
+  // 2 s deadline; the watchdog also stops a probe that never exits. Only a
+  // probe that exits 0 replaces the path, so a failed one keeps the last.
+  function probeWallpaper() {
+    if (wallpaperProbe.running) return
+    wallpaperProbe.running = true
+    wallpaperWatchdog.restart()
+  }
+
   Process {
     id: wallpaperProbe
-    command: ["readlink", "-f", Quickshell.env("HOME") + "/.local/state/omarchy/current/background"]
-    stdout: SplitParser {
-      onRead: function(line) { if (line.trim().length > 0) root.wallpaperPath = line.trim() }
+    // Stream end and exit can arrive in either order; apply once both have.
+    property var found: null
+    property var code: null
+    function settle() {
+      if (found === null || code === null) return
+      if (code === 0 && found.length > 0 && found.length <= 4096) root.wallpaperPath = found
+      found = null; code = null
     }
+    command: ["timeout", "-k", "1", "2", "readlink", "-f", Quickshell.env("HOME") + "/.local/state/omarchy/current/background"]
+    stdout: StdioCollector { onStreamFinished: { wallpaperProbe.found = text.trim(); wallpaperProbe.settle() } }
+    onStarted: { found = null; code = null }
+    onExited: function(exitCode) { wallpaperWatchdog.stop(); code = exitCode; settle() }
+  }
+
+  Timer {
+    id: wallpaperWatchdog
+    interval: 4000
+    onTriggered: wallpaperProbe.running = false
   }
 
   // ---- bounded paste ----
