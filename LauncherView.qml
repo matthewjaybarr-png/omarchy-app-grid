@@ -724,6 +724,48 @@ Item {
     return null
   }
 
+  // Omarchy gives each monitor a block of ten ids (1-10, 11-20, ...) and
+  // labels them 1-10; see default/hypr/monitor-workspaces.lua. The bar reads
+  // connector -> block from this file, and so does the strip.
+  property var workspaceBlocks: ({})
+
+  FileView {
+    path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy/monitor-workspaces"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.readWorkspaceBlocks(text())
+    onLoadFailed: root.readWorkspaceBlocks("")
+  }
+
+  function readWorkspaceBlocks(text) {
+    var next = {}
+    var lines = String(text || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var fields = lines[i].split("\t")
+      if (fields.length >= 3 && fields[1] !== "") next[fields[1]] = parseInt(fields[0], 10)
+    }
+    root.workspaceBlocks = next
+  }
+
+  // First id of this monitor's block, less one. Until Hyprland has written
+  // the file, the workspace the monitor shows is in its own block.
+  function workspaceBase() {
+    var block = root.targetScreen ? root.workspaceBlocks[root.targetScreen.name] : undefined
+    if (block === undefined) {
+      var monitor = root.targetScreen ? Hyprland.monitorFor(root.targetScreen) : null
+      var active = monitor && monitor.activeWorkspace ? monitor.activeWorkspace.id : 0
+      block = active > 0 ? Math.floor((active - 1) / 10) : 0
+    }
+    return block * 10
+  }
+
+  // What Omarchy's bar shows: the slot in the block, with 10 as "0".
+  function workspaceLabel(id) {
+    var slot = (id - 1) % 10 + 1
+    return slot === 10 ? "0" : String(slot)
+  }
+
   // The strip follows the monitor where the grid opened: a workspace
   // that lives on another monitor isn't this screen's to switch to. Ids that
   // don't exist anywhere yet stay listed -- switching to one creates it here.
@@ -740,7 +782,8 @@ Item {
       // objects, and comparing two undefined ids would silently match.
       if (!monitor || !ws.monitor || ws.monitor.name === monitor.name) ids.push(ws.id)
     }
-    for (var n = 1; n <= 5; n++) if (!exists[n]) ids.push(n)
+    var base = root.workspaceBase()
+    for (var n = base + 1; n <= base + 5; n++) if (!exists[n]) ids.push(n)
     ids.sort(function(left, right) { return left - right })
     return ids
   }
@@ -818,7 +861,7 @@ Item {
 
   function workspaceHint(id) {
     var titles = root.workspaceWindows(root.workspaceById(id)).map(root.windowTitle)
-    var label = "Workspace " + (id === 10 ? "0" : String(id))
+    var label = "Workspace " + root.workspaceLabel(id)
     return titles.length > 0 ? label + ": " + titles.join("  ·  ") : label + " (empty)"
   }
 
@@ -1512,7 +1555,9 @@ Item {
               // Only what the strip is showing: on a second monitor's
               // workspace the pill is hidden, so the shortcut shouldn't
               // quietly do something the grid says isn't there.
-              var wanted = event.key === Qt.Key_0 ? 10 : event.key - Qt.Key_0
+              // Ctrl+3 is the third workspace of this monitor's block, as
+              // SUPER+3 is in Omarchy.
+              var wanted = root.workspaceBase() + (event.key === Qt.Key_0 ? 10 : event.key - Qt.Key_0)
               if (root.workspaceIds().indexOf(wanted) >= 0) root.focusWorkspace(wanted)
               event.accepted = true
               return
@@ -1599,7 +1644,7 @@ Item {
             readonly property bool occupied: windows.length > 0
             readonly property bool focused: Hyprland.focusedWorkspace !== null
               && Hyprland.focusedWorkspace.id === modelData
-            readonly property string label: modelData === 10 ? "0" : String(modelData)
+            readonly property string label: root.workspaceLabel(modelData)
             id: pill
             readonly property bool hovered: pillMouse.containsMouse
             readonly property bool keySelected: root.zone === "strip" && root.stripWs === modelData

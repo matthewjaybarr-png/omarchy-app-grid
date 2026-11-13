@@ -116,4 +116,27 @@ const sel = r => [r.stripWs, r.stripWindow]
     assert.equal(root.zone, "grid", `${name} left the strip open`)
   }
 }
+{ // the strip uses this monitor's Omarchy block of ten: ids, placeholders, labels, dispatch
+  const screen = name => ({ name })
+  const mon = (name, active) => ({ name, activeWorkspace: active ? { id: active } : null })
+  const ws = (id, name) => ({ id, monitor: { name } })
+  const Hyprland = {
+    workspaces: { values: [ws(-98, "eDP-2"), ws(1, "eDP-2"), ws(4, "eDP-2"), ws(51, "DP-1"), ws(53, "DP-1")] },
+    monitorFor: s => ({ "eDP-2": mon("eDP-2", 1), "DP-1": mon("DP-1", 53), "DP-3": mon("DP-3", 0) })[s.name],
+  }
+  const log = []
+  const make = (name, blocks = {}) => {
+    const root = { targetScreen: screen(name), workspaceBlocks: blocks, afterClose: (d, m) => log.push([d, m]) }
+    for (const n of ["workspaceBase", "workspaceLabel", "workspaceIds", "focusWorkspace"])
+      root[n] = new Function("root", "Hyprland", `return ${fn(n)}`)(root, Hyprland)
+    return root
+  }
+  assert.deepEqual(make("eDP-2").workspaceIds(), [1, 2, 3, 4, 5])
+  assert.deepEqual(make("DP-1").workspaceIds(), [51, 52, 53, 54, 55], "fallback block from the active workspace")
+  assert.deepEqual(make("DP-1", { "DP-1": 2 }).workspaceIds(), [21, 22, 23, 24, 25, 51, 53], "file's block wins; guests stay")
+  assert.deepEqual(make("DP-3").workspaceIds(), [2, 3, 5], "no block known: block 0, other monitors' ids hidden")
+  assert.deepEqual([1, 10, 51, 60].map(make("DP-1").workspaceLabel), ["1", "0", "1", "0"])
+  make("DP-1").focusWorkspace(53)
+  assert.deepEqual(log, [['hl.dsp.focus({ workspace = "53" })', "DP-1"]], "switch must target the grid's monitor")
+}
 console.log("ok strip-keys")
