@@ -1443,6 +1443,34 @@ Item {
     }
   }
 
+  // ---- bounded paste ----
+  // Qt's native paste reads the whole clipboard synchronously, with no size or
+  // time limit, so another clipboard owner could stall or bloat the shell.
+  // Both text fields paste through wl-paste instead: 64 KiB cap, 3 s deadline;
+  // anything over, failed or late is dropped.
+  property Item pasteTarget: null
+
+  function pasteInto(input) {
+    root.pasteTarget = input
+    if (!pasteProc.running) pasteProc.running = true
+  }
+
+  function finishPaste(output) {
+    var input = root.pasteTarget
+    root.pasteTarget = null
+    // Stale: the field lost focus or the grid closed while wl-paste ran.
+    if (output.indexOf("ok:") !== 0 || !input || !input.activeFocus || !root.opened) return
+    if (input.selectedText.length > 0) input.remove(input.selectionStart, input.selectionEnd)
+    input.insert(input.cursorPosition, output.slice(3).replace(/[\r\n\t]+/g, " "))
+  }
+
+  Process {
+    id: pasteProc
+    command: ["bash", "-c", "set -o pipefail; d=$(timeout -k 1 2 wl-paste -n -t text | head -c 65537) || exit 1; "
+      + "LC_ALL=C; [ ${#d} -le 65536 ] || exit 1; printf 'ok:%s' \"$d\""]
+    stdout: StdioCollector { onStreamFinished: root.finishPaste(text) }
+  }
+
   // ---- surface ----
 
   PanelWindow {
@@ -1546,7 +1574,15 @@ Item {
           clip: true
           onTextEdited: root.query = text
 
+          // Middle-click would paste PRIMARY natively, unbounded; swallow it.
+          MouseArea { anchors.fill: parent; acceptedButtons: Qt.MiddleButton }
+
           Keys.onPressed: function(event) {
+            if (event.matches(StandardKey.Paste)) {
+              root.pasteInto(searchInput)
+              event.accepted = true
+              return
+            }
             // Ctrl+1..9 / Ctrl+0 reach the workspace strip without the mouse.
             // Plain digits have to keep typing, and SUPER never reaches a
             // layer surface, so Ctrl is what's left.
@@ -2251,6 +2287,11 @@ Item {
           })
           onEditingFinished: if (root.openFolder) root.renameFolder(root.openFolder.id, text)
           Keys.onReturnPressed: focus = false
+          // Paste goes through the bounded reader, as in the search field.
+          Keys.onPressed: function(event) {
+            if (event.matches(StandardKey.Paste)) { root.pasteInto(folderName); event.accepted = true }
+          }
+          MouseArea { anchors.fill: parent; acceptedButtons: Qt.MiddleButton }
         }
 
         Grid {
