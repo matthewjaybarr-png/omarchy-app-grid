@@ -115,16 +115,18 @@ and drop the binding you added.
   which in hicolor is usually the 16x16 PNG and looks mushy at grid size. The
   grid re-indexes PNGs by pixel size and overrides only the names that
   resolved to one.
-- Multi-monitor: the grid opens on the focused monitor and the workspace strip
-  stays with it. A headless output to the left, right and above at scales 1
-  and 2 was checked for opening, workspace IDs and reported screen size. A focus
-  change and Ctrl+9 switch were checked at scale 2; clicking a window preview
-  and Ctrl+2 were checked on the left at scale 1, along with dragging an app,
-  dropping it and cancelling a drag. A window preview was checked above at
-  scale 2. Cards, previews and click-to-focus were tested previously with a
-  headless output. The grid was also confirmed
-  to open on the laptop and two physical displays at scale 2; other interactions
-  on those displays have not been verified. Reports welcome.
+- Multi-monitor: the grid opens on the focused monitor, and the workspace strip
+  shows that monitor's workspaces. It follows Omarchy's per-monitor numbering,
+  so pills read 1-10 on every monitor and Ctrl+3 means that monitor's third
+  workspace, as SUPER+3 does.
+  - Tested on a laptop panel (scale 1.6) plus one external display (scale
+    1.33): opening, strip contents, screen size, Ctrl+digit switching and search.
+  - Tested on a headless output left, right and above, at scales 1 and 2:
+    opening, strip contents and screen size.
+  - Only some interactions were tested on the headless output. Click-to-focus,
+    Ctrl+2, and dragging, dropping and cancelling a drag were checked on the left
+    at scale 1. A window preview was checked above at scale 2.
+  - Other layouts and interactions haven't been verified. Reports welcome.
 - Live previews use Wayland screencopy. With four windows previewing, the shell
   sat around 12–15% of one core on the test laptop; folded or closed, 0%.
 - `omarchy-shell shell call matthewjaybarr.app-grid debugState x` dumps the
