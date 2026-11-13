@@ -307,6 +307,10 @@ Item {
     path: Quickshell.env("HOME") + "/.local/state/omarchy/omarchy-app-grid.json"
     watchChanges: true
     printErrors: false
+    // Read synchronously, so no async read can land after a plugin reload has
+    // torn this view down. A precaution while omacom/omarchy#17034 (shell
+    // SIGSEGV on plugin hot-reload) is open; app-grid isn't shown to cause it.
+    blockAllReads: true
     onFileChanged: reload()
     onAdapterUpdated: writeAdapter()
     // No file yet on first run; the adapter defaults stand in until a pin.
