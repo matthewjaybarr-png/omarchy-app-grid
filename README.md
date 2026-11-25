@@ -133,6 +133,19 @@ and drop the binding you added.
   grid's state as JSON (the trailing argument is required). Handy in a bug
   report.
 
+## Releases
+
+Each release is submitted to the Omarchy plugin marketplace for verification.
+A fix during review updates the same submission.
+
+| Version | Commit | Submitted | Marketplace submission | Status |
+|---|---|---|---|---|
+| 0.5.5 | `02fd2e6` | 2026-11-25 | [#15924](https://github.com/omacom/omarchy-plugin-marketplace/issues/15924) | In review |
+| 0.5.4 | `88c1123` | 2026-11-13 | [#14827](https://github.com/omacom/omarchy-plugin-marketplace/issues/14827) | Verified 2026-11-13 (0.5.1–0.5.4 in one review) |
+| 0.5.0 | `e2d3733` | 2026-10-24 | [#12766](https://github.com/omacom/omarchy-plugin-marketplace/issues/12766) | Verified 2026-10-26 |
+| 0.4.0 | `a9aafbb` | 2026-10-08 | [#10621](https://github.com/omacom/omarchy-plugin-marketplace/issues/10621) | Verified 2026-10-08 |
+| 0.3.0 | `3276033` | 2026-10-03 | [#9782](https://github.com/omacom/omarchy-plugin-marketplace/issues/9782) | Verified 2026-10-03 |
+
 ## Hacking on it
 
 ```bash
