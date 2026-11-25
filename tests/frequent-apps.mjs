@@ -53,4 +53,19 @@ assert.match(block("  function refreshApps("), /root\.boostRows\(/)
 assert.match(qml, /property var usage: \(\{\}\)/)
 assert.match(qml, /property bool showFrequent: true/)
 
+// Gear menu toggle, on unless explicitly off.
+const settings = block("    if (entry.isSettings) {")
+const menu = prefs => new Function("root", "prefs", settings)({ previewMode: () => "live" }, prefs)
+assert.deepEqual(menu({ showFrequent: false }).at(-1), { label: "   Show frequent apps", action: "frequent" })
+assert.equal(menu({}).at(-1).label, "✓  Show frequent apps")
+assert.match(block("  function runMenuAction("), /case "frequent":\s*prefs\.showFrequent = prefs\.showFrequent === false/)
+
+// The row takes a grid row; keys walk grid -> row -> strip and back.
+assert.match(qml, /readonly property int rows:[^\n]*\n[^\n]*root\.frequentShown \? root\.cellHeight : 0/)
+const keys = block("          Keys.onPressed: function(event) {")
+assert.match(keys, /root\.zone === "frequent"/)
+assert.match(keys, /root\.frequentEnter\(\) \|\| root\.stripEnter\(\)/)
+assert.match(keys, /!root\.dragActive && !root\.frequentEnter\(\)/)
+assert.match(block("  onQueryChanged: {"), /if \(root\.zone === "frequent"\) root\.zone = "grid"/)
+
 console.log("ok frequent-apps")

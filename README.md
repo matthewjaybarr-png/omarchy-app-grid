@@ -59,6 +59,14 @@ new windows**.
 the bottom, or drag a tile onto the dash. Dash icons drag to reorder, and drag
 off to unpin.
 
+**Frequent** — the apps you use most sit in a row above the grid, so the
+everyday ones are there the moment it opens. Use fades over a couple of weeks,
+so the row follows what you use now without shuffling on every launch.
+Favourites and hidden apps stay out of it. Search uses the same record: among
+equally good matches, the app you use more comes first. Only launches and
+switches made from the grid count. Turn the row off with **Show frequent
+apps** in the gear menu; search keeps the ordering.
+
 **Hiding** — **Hide from launcher** drops an app out of the grid. It still
 turns up in search, dimmed, so there's always a way back. This is the
 plugin's own list; nothing is uninstalled.
@@ -86,14 +94,16 @@ the grid. Previews only run while the cards are open; folded, the strip costs
 nothing. On slower machines, pick **Still previews** (one picture per window
 when the cards appear) or **No previews** (app icons only) from the gear menu.
 
-From the keyboard, press `Up` from the grid's top row to enter the strip: `Left`/`Right`
+From the keyboard, press `Up` from the grid's top row to enter the Frequent row
+(`Left`/`Right`, `Enter`), and `Up` again to enter the strip: `Left`/`Right`
 pick a workspace, `Tab` steps through its windows, `Enter` switches,
 `Shift+Left`/`Right` moves the window, `Delete` closes it, `Down` or `Escape` goes
 back. Typing still searches.
 
 Everything you arrange lives in
 `~/.local/state/omarchy/omarchy-app-grid.json` — favourites, hidden apps,
-grid order, folders, and the two preferences above. Delete it to start over.
+grid order, folders, how often you use each app, and the preferences above.
+Delete it to start over.
 
 > **Uninstall… really uninstalls.** The third entry in the right-click menu
 > hands off to Omarchy's own `omarchy-remove-launcher-entry`, which deletes

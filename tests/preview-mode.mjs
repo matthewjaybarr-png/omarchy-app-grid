@@ -35,9 +35,9 @@ function settingsItems(prefs) {
 const items = settingsItems({ previews: "still" })
 assert.deepEqual(items.map(i => i.label), [
   "✓  Switch to open apps", "   Always open new windows",
-  "   Live previews", "✓  Still previews", "   No previews (icons only)"])
-assert.deepEqual(items.slice(2).map(i => i.action), ["previews-live", "previews-still", "previews-off"])
-assert.equal(settingsItems({}).filter(i => i.label.startsWith("✓")).length, 2, "default: one tick per group")
+  "   Live previews", "✓  Still previews", "   No previews (icons only)", "✓  Show frequent apps"])
+assert.deepEqual(items.slice(2, 5).map(i => i.action), ["previews-live", "previews-still", "previews-off"])
+assert.equal(settingsItems({}).filter(i => i.label.startsWith("✓")).length, 3, "default: one tick per group")
 
 // The menu action stores the mode named after "previews-".
 const run = block("  function runMenuAction(")

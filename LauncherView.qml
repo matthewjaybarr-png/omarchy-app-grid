@@ -169,6 +169,8 @@ Item {
       menuArmed: root.menuArmed,
       searchFocus: searchInput.activeFocus,
       zone: root.zone, stripWs: root.stripWs, stripWindow: root.stripWindow,
+      frequent: root.frequentShown ? root.frequentEntries.map(function(e) { return String(e.id) }) : [],
+      frequentIndex: root.frequentIndex,
       drag: root.dragActive
         ? { source: root.dragSource, id: root.dragId, from: root.dragFrom,
             drop: root.dropIndex, dash: root.dropOnDash ? root.dashDropIndex : -1,
@@ -228,6 +230,8 @@ Item {
     root.page = 0
     root.selectedIndex = -1
     root.dragOffset = 0
+    root.usageNow = Date.now()
+    root.frequentIndex = 0
     if (root.appLibrary) root.appLibrary.refreshIcons()
     root.refreshApps()
     root.refreshWindows()
@@ -390,6 +394,20 @@ Item {
       .filter(function(e) { return !!e })
   }
 
+  // The Frequent row: most-used apps, minus hidden ones, favourites (the dash
+  // has them) and ids that no longer resolve. usageNow is fixed per opening so
+  // the row doesn't reorder under the pointer.
+  property real usageNow: 0
+  property int frequentIndex: 0
+  readonly property var frequentEntries: {
+    var byId = root.entryById
+    var skip = function(id) { return root.isHidden(id) || root.isFavourite(id) || !byId[id] }
+    return root.frequentIds(prefs.usage, root.usageNow, root.columns, skip)
+      .map(function(id) { return byId[id] })
+  }
+  readonly property bool frequentShown: prefs.showFrequent !== false
+    && root.query.length === 0 && root.frequentEntries.length > 0
+
   // ---- folders ----
   //
   // A folder is a grid item like any app: it has an id, so it takes a place in
@@ -488,6 +506,7 @@ Item {
     root.page = 0
     root.selectedIndex = root.query.length > 0 && root.apps.length > 0 ? 0 : -1
     if (root.zone === "strip") root.stripLeave()
+    if (root.zone === "frequent") root.zone = "grid"
   }
 
   onInteractiveChanged: if (interactive) Qt.callLater(function() { searchInput.forceActiveFocus() })
@@ -520,7 +539,8 @@ Item {
   // `fresh` (middle-click, Ctrl+click, Ctrl+Enter) always starts a new copy.
   // Usage: { id: [score, lastMs] }; a score halves every 7 days, a use adds 1.
   function decayedScore(rec, now) {
-    if (!Array.isArray(rec) || typeof rec[0] !== "number" || typeof rec[1] !== "number") return 0
+    // Not Array.isArray: a saved list comes back from the JsonAdapter as a sequence object.
+    if (!rec || typeof rec !== "object" || typeof rec[0] !== "number" || typeof rec[1] !== "number") return 0
     return rec[0] * Math.pow(0.5, Math.max(0, now - rec[1]) / (7 * 86400000))
   }
   function bumpUsage(usage, id, now) {
@@ -589,7 +609,8 @@ Item {
               { label: (fresh ? "✓  " : "   ") + "Always open new windows", action: "click-new" },
               { label: (mode === "live" ? "✓  " : "   ") + "Live previews", action: "previews-live" },
               { label: (mode === "still" ? "✓  " : "   ") + "Still previews", action: "previews-still" },
-              { label: (mode === "off" ? "✓  " : "   ") + "No previews (icons only)", action: "previews-off" }]
+              { label: (mode === "off" ? "✓  " : "   ") + "No previews (icons only)", action: "previews-off" },
+              { label: (prefs.showFrequent === false ? "   " : "✓  ") + "Show frequent apps", action: "frequent" }]
     }
     if (entry.isFolder)
       return [{ label: "Open", action: "open" },
@@ -667,6 +688,9 @@ Item {
     case "previews-still":
     case "previews-off":
       prefs.previews = action.slice(9)
+      break
+    case "frequent":
+      prefs.showFrequent = prefs.showFrequent === false
       break
     case "favourite":
       root.setFavourite(id, !root.isFavourite(id))
@@ -801,7 +825,8 @@ Item {
   readonly property int columns: Math.max(4, Math.min(8, Math.floor(root.screenWidth * 0.84 / cellWidth)))
   // Leave room for the workspace strip between search and the app grid, and
   // give up a row when the strip is expanded into cards.
-  readonly property int rows: Math.max(2, Math.min(5, Math.floor((root.screenHeight - Style.space(280) - root.stripExtra) / cellHeight)))
+  readonly property int rows: Math.max(2, Math.min(5, Math.floor((root.screenHeight - Style.space(280) - root.stripExtra
+    - (root.frequentShown ? root.cellHeight : 0)) / cellHeight)))
   readonly property int perPage: columns * rows
   readonly property int dashItemSize: Math.round(root.iconSize * 0.72)
   readonly property int dashCell: root.dashItemSize + Style.space(14)
@@ -1073,6 +1098,14 @@ Item {
     root.stripWindow = ""
     root.stripValidate()
     root.stripSelect(root.stripWs, "")
+    return true
+  }
+
+  function frequentEnter() {
+    if (!root.frequentShown || root.dragActive || root.menuEntry || root.openFolderId !== "") return false
+    if (root.zone === "strip") root.stripLeave()
+    root.zone = "frequent"
+    root.frequentIndex = Math.max(0, Math.min(root.frequentEntries.length - 1, root.frequentIndex))
     return true
   }
 
@@ -1752,11 +1785,29 @@ Item {
               case Qt.Key_Delete: root.stripClose(); break
               case Qt.Key_Up: break
               case Qt.Key_Down:
-                if (!root.dragActive) { root.stripLeave(); root.moveSelection(0, 0) }
+                if (!root.dragActive && !root.frequentEnter()) { root.stripLeave(); root.moveSelection(0, 0) }
                 break
               default: handled = false
               }
               if (handled) { event.accepted = true; return }
+            }
+            if (root.zone === "frequent" && !root.dragActive && !root.menuEntry) {
+              var used = true
+              switch (event.key) {
+              case Qt.Key_Left: root.frequentIndex = Math.max(0, root.frequentIndex - 1); break
+              case Qt.Key_Right:
+                root.frequentIndex = Math.min(root.frequentEntries.length - 1, root.frequentIndex + 1); break
+              case Qt.Key_Return:
+              case Qt.Key_Enter:
+                root.launchEntry(root.frequentEntries[root.frequentIndex],
+                                 (event.modifiers & Qt.ControlModifier) !== 0)
+                break
+              case Qt.Key_Up: root.stripEnter(); break
+              case Qt.Key_Down:
+              case Qt.Key_Escape: root.zone = "grid"; root.moveSelection(0, 0); break
+              default: used = false
+              }
+              if (used) { event.accepted = true; return }
             }
             switch (event.key) {
             case Qt.Key_Escape:
@@ -1775,9 +1826,10 @@ Item {
             case Qt.Key_Left: root.moveSelection(-1, 0); break
             case Qt.Key_Right: root.moveSelection(1, 0); break
             case Qt.Key_Up:
-              // From the top row (or with nothing selected) Up climbs into the strip.
+              // From the top row (or with nothing selected) Up climbs into the
+              // Frequent row, or the strip when there is no row.
               if ((root.selectedIndex < 0 || root.selectedIndex % root.perPage < root.columns)
-                  && root.stripEnter()) break
+                  && (root.frequentEnter() || root.stripEnter())) break
               root.moveSelection(0, -1)
               break
             case Qt.Key_Down: root.moveSelection(0, 1); break
@@ -2125,6 +2177,88 @@ Item {
         font.pixelSize: Style.font.caption
       }
 
+      // Frequent row: plain tiles (AppTile is tied to grid slots and drag).
+      Row {
+        visible: root.frequentShown
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: workspaceStrip.y + workspaceStrip.height + Style.space(18)
+
+        Repeater {
+          model: root.frequentShown ? root.frequentEntries : []
+
+          Item {
+            id: freq
+            required property var modelData
+            required property int index
+            width: root.cellWidth
+            height: root.cellHeight
+
+            Rectangle {
+              anchors.fill: parent
+              anchors.margins: Style.space(6)
+              radius: Style.space(18)
+              color: root.zone === "frequent" && root.frequentIndex === freq.index
+                ? Util.alpha(Color.foreground, 0.16)
+                : freqHover.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent"
+              Behavior on color { ColorAnimation { duration: 120 } }
+            }
+
+            Image {
+              id: freqIcon
+              width: root.iconSize
+              height: root.iconSize
+              anchors.horizontalCenter: parent.horizontalCenter
+              y: Style.space(14)
+              fillMode: Image.PreserveAspectFit
+              sourceSize.width: width * Screen.devicePixelRatio
+              sourceSize.height: height * Screen.devicePixelRatio
+              source: root.iconSource(freq.modelData.icon)
+              asynchronous: true
+              scale: freqHover.pressed ? 0.92 : 1
+              Behavior on scale { NumberAnimation { duration: 90 } }
+            }
+
+            Rectangle {
+              visible: root.isRunning(freq.modelData)
+              width: Style.space(5)
+              height: width
+              radius: width / 2
+              anchors.horizontalCenter: parent.horizontalCenter
+              y: freqIcon.y + freqIcon.height + Style.space(2)
+              color: Color.accent
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              anchors.top: freqIcon.bottom
+              anchors.topMargin: Style.space(8)
+              anchors.horizontalCenter: parent.horizontalCenter
+              width: parent.width - Style.space(16)
+              horizontalAlignment: Text.AlignHCenter
+              elide: Text.ElideRight
+              maximumLineCount: 1
+              text: root.itemName(freq.modelData)
+              color: Color.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+            }
+
+            MouseArea {
+              id: freqHover
+              anchors.fill: parent
+              hoverEnabled: true
+              acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+              onClicked: function(mouse) {
+                if (mouse.button === Qt.RightButton)
+                  root.openMenu(freq.modelData, freq.mapToItem(null, mouse.x, mouse.y))
+                else
+                  root.launchEntry(freq.modelData, root.wantsFresh(mouse))
+              }
+            }
+          }
+        }
+      }
+
       // Paged grid
       Item {
         id: viewport
@@ -2132,6 +2266,7 @@ Item {
         height: root.rows * root.cellHeight
         anchors.horizontalCenter: parent.horizontalCenter
         y: workspaceStrip.y + workspaceStrip.height + Style.space(18)
+          + (root.frequentShown ? root.cellHeight : 0)
         clip: true
 
         Item {
