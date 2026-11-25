@@ -90,20 +90,47 @@ Item {
 
   Process {
     id: pngScan
+    property string key: ""
     command: ["timeout", "-k", "1", "10", "bash", "-c", root.pngScanCommand()]
     stdout: SplitParser { onRead: function(line) { root.indexPngLine(line) } }
     onStarted: root.pendingPngIndex = ({})
     // Swapping the whole map re-evaluates every iconSource() binding at once.
     // A scan that timed out or failed keeps the previous index.
-    onExited: function(code) { if (code === 0) root.pngIndex = root.pendingPngIndex }
+    onExited: function(code) {
+      if (code !== 0) return
+      root.pngIndex = root.pendingPngIndex
+      root.pngIconKey = key
+    }
   }
 
-  // Rescan when Omarchy's own index changes, so a freshly installed app's icon
-  // appears at the same moment its entry does.
+  // Icon names of every listed app; a rescan is only worth it when this changes.
+  property string pngIconKey: ""
+  function appIconKey() {
+    var rows = root.appLibrary ? root.appLibrary.sortedEntries("") : []
+    return rows.map(function(row) { return String(row.entry.icon || "") }).join("\n")
+  }
+
+  // Rescan when the listed apps' icons change, so a newly installed app's icon
+  // appears. Not on iconIndexChanged: the plugin API lacks it, and refreshIcons()
+  // re-fires it on every launcher open. appsChanged also arrives in bursts with no
+  // file changed (every ~18s at idle here), hence the debounce and key check.
+  // shortcut: a new PNG for an icon name already listed waits for a shell restart.
   Connections {
     target: root.appLibrary
     ignoreUnknownSignals: true
-    function onIconIndexChanged() { if (!pngScan.running) pngScan.running = true }
+    function onAppsChanged() { pngRescan.restart() }
+  }
+
+  Timer {
+    id: pngRescan
+    interval: 1500
+    onTriggered: {
+      if (pngScan.running) { restart(); return }
+      var key = root.appIconKey()
+      if (key === root.pngIconKey) return
+      pngScan.key = key
+      pngScan.running = true
+    }
   }
 
   Component.onCompleted: pngScan.running = true

@@ -89,7 +89,7 @@ function setup() {
   const a = qml.indexOf("function pngScanCommand"), b = qml.indexOf("].join", a)
   const scanCmd = [...qml.slice(a, b).matchAll(/^\s*'(.*)',?$/gm)].map(m => m[1].replace(/\\\\/g, "\\")).join(" ")
   assert.match(qml, /command: \["timeout", "-k", "1", "10", "bash", "-c", root\.pngScanCommand\(\)\]/)
-  assert.match(qml, /onExited: function\(code\) \{ if \(code === 0\) root\.pngIndex/)
+  assert.match(qml, /onExited: function\(code\) \{\n      if \(code !== 0\) return\n      root\.pngIndex = root\.pendingPngIndex/)
   const home = mkdtempSync(join(tmpdir(), "png-scan-")), apps = join(home, ".icons/hicolor/48x48/apps")
   const scanRun = (cmd, env = {}) => spawnSync("bash", ["-c", cmd], { env: { ...process.env, HOME: home, XDG_DATA_DIRS: join(home, "none"), ...env }, encoding: "utf8" })
   try {
@@ -117,5 +117,25 @@ function setup() {
       assert.equal(p.root.wallpaperPath, want, `found=${found.slice(0, 9)} code=${code}`)
     }
   }
+}
+// pngRescan: an appsChanged burst only rescans when the listed icons changed,
+// waits out a running scan, and a failed scan leaves the key for a retry
+{
+  const body = (marker, from) => { const at = qml.indexOf(marker, qml.indexOf(from)); let d = 0
+    for (let i = qml.indexOf("{", at); ; i++) { if (qml[i] === "{") d++; else if (qml[i] === "}" && --d === 0) return qml.slice(qml.indexOf("{", at) + 1, i) } }
+  const trig = body("onTriggered:", "id: pngRescan"), exit = body("onExited:", "id: pngScan")
+  let icons = ["a", "b"], restarts = 0
+  const root = { pngIconKey: "", pngIndex: {}, pendingPngIndex: { x: 1 },
+    appLibrary: { sortedEntries: () => icons.map(icon => ({ entry: { icon } })) } }
+  root.appIconKey = new Function("root", fn("appIconKey").replace(/^function appIconKey\(\) /, "")).bind(null, root)
+  const scan = { running: false, key: "" }
+  const fire = () => new Function("root", "pngScan", "restart", trig)(root, scan, () => restarts++)
+  const done = code => { scan.running = false; new Function("p", "root", "code", `with (p) { ${exit} }`)(scan, root, code) }
+  fire(); assert.equal(scan.running, true, "first burst scans"); done(0)
+  assert.equal(root.pngIconKey, "a\nb"); assert.deepEqual(root.pngIndex, { x: 1 })
+  fire(); assert.equal(scan.running, false, "unchanged icons must not rescan")
+  icons = ["a", "b", "c"]; scan.running = true; fire(); assert.equal(restarts, 1, "waits for a running scan")
+  scan.running = false; fire(); assert.equal(scan.running, true); done(124)
+  assert.equal(root.pngIconKey, "a\nb", "failed scan keeps the old key"); fire(); assert.equal(scan.running, true, "retries after failure")
 }
 console.log("ok paste-bound")
