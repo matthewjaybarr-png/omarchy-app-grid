@@ -506,7 +506,6 @@ Item {
     root.page = 0
     root.selectedIndex = root.query.length > 0 && root.apps.length > 0 ? 0 : -1
     if (root.zone === "strip") root.stripLeave()
-    if (root.zone === "frequent") root.zone = "grid"
   }
 
   onInteractiveChanged: if (interactive) Qt.callLater(function() { searchInput.forceActiveFocus() })
@@ -514,7 +513,14 @@ Item {
   onOpenFolderIdChanged: {
     if (root.openFolderId === "") searchInput.forceActiveFocus()
     else if (root.zone === "strip") root.stripLeave()
+    else if (root.zone === "frequent") root.zone = "grid"
   }
+
+  // The row can vanish under the keyboard (typing, the gear toggle, pinning its last app).
+  onFrequentShownChanged: if (!root.frequentShown && root.zone === "frequent") root.zone = "grid"
+  onFrequentEntriesChanged: root.frequentIndex = Math.max(0, Math.min(root.frequentIndex, root.frequentEntries.length - 1))
+  // The row takes a grid row, so showing or hiding it changes perPage.
+  onPageCountChanged: if (root.page >= root.pageCount) root.page = root.pageCount - 1
 
   // A menu or folder owns the keys; strip keys must not act behind it.
   onMenuEntryChanged: if (root.menuEntry && root.zone === "strip") root.stripLeave()
@@ -567,7 +573,10 @@ Item {
   function boostRows(rows, usage, now) {
     var u = usage && typeof usage === "object" && !Array.isArray(usage) ? usage : ({})
     var keyed = rows.map(function(row, i) {
-      return [Math.floor(row.score / 500), root.decayedScore(u[String(row.entry.id)], now), i, row]
+      // Match kind = how many of AppSearch.js's lower base scores this beats (name prefix 10000 … fallback 4000).
+      // shortcut: a name match 400+ chars deep reads as an id match; recompute kinds if AppSearch exposes them.
+      var kind = [9500, 8000, 7600, 6000, 5000, 4600, 4000].filter(function(b) { return row.score > b }).length
+      return [kind, root.decayedScore(u[String(row.entry.id)], now), i, row]
     })
     keyed.sort(function(a, b) { return b[0] - a[0] || b[1] - a[1] || a[2] - b[2] })
     return keyed.map(function(k) { return k[3] })

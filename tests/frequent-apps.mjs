@@ -45,6 +45,9 @@ const rows = [{ entry: { id: "files" }, score: 9995 }, { entry: { id: "firefox" 
   { entry: { id: "signal" }, score: 7990 }]
 assert.deepEqual(root.boostRows(rows, { firefox: [5, now], signal: [50, now] }, now).map(r => r.entry.id),
   ["firefox", "files", "signal"], "usage reorders within a band, never across")
+// A name match mid-word (8000 - 10*pos - len) beats a heavily used id-only match (7600 - ...).
+assert.deepEqual(root.boostRows([{ entry: { id: "x.signal" }, score: 7560 }, { entry: { id: "files" }, score: 7950 }],
+  { "x.signal": [50, now] }, now).map(r => r.entry.id), ["files", "x.signal"])
 assert.deepEqual(root.boostRows(rows, undefined, now).map(r => r.entry.id), ["files", "firefox", "signal"])
 
 assert.ok((block("  function launchEntry(").match(/root\.recordUse\(entry\.id\)/g) || []).length >= 2)
@@ -66,6 +69,8 @@ const keys = block("          Keys.onPressed: function(event) {")
 assert.match(keys, /root\.zone === "frequent"/)
 assert.match(keys, /root\.frequentEnter\(\) \|\| root\.stripEnter\(\)/)
 assert.match(keys, /!root\.dragActive && !root\.frequentEnter\(\)/)
-assert.match(block("  onQueryChanged: {"), /if \(root\.zone === "frequent"\) root\.zone = "grid"/)
+assert.match(qml, /onFrequentShownChanged: if \(!root\.frequentShown && root\.zone === "frequent"\) root\.zone = "grid"/)
+assert.match(block("  onOpenFolderIdChanged: {"), /root\.zone === "frequent"\) root\.zone = "grid"/)
+assert.match(qml, /onPageCountChanged: if \(root\.page >= root\.pageCount\) root\.page = root\.pageCount - 1/)
 
 console.log("ok frequent-apps")
