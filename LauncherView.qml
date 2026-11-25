@@ -247,6 +247,7 @@ Item {
   function refreshApps() {
     // sortedEntries() returns ranked rows ({entry, score, key, name}).
     var rows = root.appLibrary ? root.appLibrary.sortedEntries(root.query) : []
+    if (root.query.length > 0) rows = root.boostRows(rows, prefs.usage, Date.now())
     var entries = rows.map(function(row) { return row.entry })
     // Hidden apps drop out of the grid but still turn up in search, dimmed, so
     // there is always a way back to the menu that unhides them.
@@ -365,6 +366,8 @@ Item {
       // Workspace-card window previews: "live", "still" (one frame when the
       // cards appear) or "off" (app icons only).
       property string previews: "live"
+      property var usage: ({})
+      property bool showFrequent: true
     }
   }
 
@@ -515,15 +518,54 @@ Item {
   }
 
   // `fresh` (middle-click, Ctrl+click, Ctrl+Enter) always starts a new copy.
+  // Usage: { id: [score, lastMs] }; a score halves every 7 days, a use adds 1.
+  function decayedScore(rec, now) {
+    if (!Array.isArray(rec) || typeof rec[0] !== "number" || typeof rec[1] !== "number") return 0
+    return rec[0] * Math.pow(0.5, Math.max(0, now - rec[1]) / (7 * 86400000))
+  }
+  function bumpUsage(usage, id, now) {
+    var ids = usage && typeof usage === "object" && !Array.isArray(usage) ? Object.keys(usage) : []
+    var scored = []
+    for (var i = 0; i < ids.length; i++)
+      if (ids[i] !== id && root.decayedScore(usage[ids[i]], now) > 0)
+        scored.push([ids[i], usage[ids[i]], root.decayedScore(usage[ids[i]], now)])
+    var mine = ids.indexOf(id) >= 0 ? root.decayedScore(usage[id], now) : 0
+    scored.push([id, [mine + 1, now], mine + 1])
+    scored.sort(function(a, b) { return b[2] - a[2] || (b[0] === id) - (a[0] === id) })
+    var out = ({})
+    for (var j = 0; j < Math.min(40, scored.length); j++) out[scored[j][0]] = scored[j][1]
+    return out
+  }
+  function frequentIds(usage, now, limit, skip) {
+    if (!usage || typeof usage !== "object" || Array.isArray(usage)) return []
+    var scored = Object.keys(usage).map(function(id) { return [id, root.decayedScore(usage[id], now)] })
+      .filter(function(r) { return r[1] > 0 && !skip(r[0]) })
+    scored.sort(function(a, b) { return b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0) })
+    return scored.slice(0, limit).map(function(r) { return r[0] })
+  }
+  // shortcut: match kind is guessed from AppSearch's score bands (500 wide); revisit if its scoring changes.
+  function boostRows(rows, usage, now) {
+    var u = usage && typeof usage === "object" && !Array.isArray(usage) ? usage : ({})
+    var keyed = rows.map(function(row, i) {
+      return [Math.floor(row.score / 500), root.decayedScore(u[String(row.entry.id)], now), i, row]
+    })
+    keyed.sort(function(a, b) { return b[0] - a[0] || b[1] - a[1] || a[2] - b[2] })
+    return keyed.map(function(k) { return k[3] })
+  }
+  function recordUse(id) {
+    prefs.usage = root.bumpUsage(prefs.usage, String(id), Date.now())
+  }
   function launchEntry(entry, fresh) {
     if (entry && entry.isFolder) { root.openFolderId = String(entry.id); return }
     if (entry && entry.isWindow) { root.focusWindow(entry.toplevel); return }
     if (!entry || !root.appLibrary) return
     var windows = root.runningWindows[String(entry.id)]
     if (windows && !fresh && !prefs.clickLaunchesNew) {
+      root.recordUse(entry.id)
       root.focusWindow(windows[0])
       return
     }
+    root.recordUse(entry.id)
     root.appLibrary.launch(entry.id, root.appLibrary.entryName(entry))
     root.requestClose()
   }
@@ -1099,6 +1141,7 @@ Item {
   // and the rest.
   function launchOnWorkspace(entry, id) {
     if (!entry || !root.appLibrary) return
+    root.recordUse(entry.id)
     root.pendingLaunch = entry
     root.focusWorkspace(id)
   }
