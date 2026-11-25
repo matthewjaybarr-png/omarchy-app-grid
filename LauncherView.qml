@@ -1919,7 +1919,8 @@ Item {
                     anchors.fill: parent
                     anchors.margins: 1
                     live: root.previewMode() === "live"
-                    captureSource: root.opened && root.stripExpanded && root.previewMode() !== "off" ? windowBox.modelData.wayland : null                  }
+                    captureSource: root.opened && root.stripExpanded && root.previewMode() !== "off" ? windowBox.modelData.wayland : null
+                  }
 
                   // Centred while there's no picture, then a corner badge.
                   Image {

@@ -23,6 +23,9 @@ assert.equal(previewMode({ previews: true }), "live")
 assert.equal(previewMode({ previews: "still" }), "still")
 assert.equal(previewMode({ previews: "off" }), "off")
 
+// The pref exists on the saved JsonAdapter with a live default.
+assert.match(qml, /property string previews: "live"/)
+
 // The settings branch of menuItems, with the real previewMode behind root.
 const settings = block("    if (entry.isSettings) {")
 function settingsItems(prefs) {
