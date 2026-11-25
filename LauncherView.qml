@@ -362,6 +362,9 @@ Item {
       // Clicking an app that's already open launches another copy instead
       // of switching to it.
       property bool clickLaunchesNew: false
+      // Workspace-card window previews: "live", "still" (one frame when the
+      // cards appear) or "off" (app icons only).
+      property string previews: "live"
     }
   }
 
@@ -539,8 +542,12 @@ Item {
     if (entry.isSettings) {
       var fresh = prefs.clickLaunchesNew === true
       // What a click on an app that's already open does.
+      var mode = root.previewMode()
       return [{ label: (fresh ? "   " : "✓  ") + "Switch to open apps", action: "click-switch" },
-              { label: (fresh ? "✓  " : "   ") + "Always open new windows", action: "click-new" }]
+              { label: (fresh ? "✓  " : "   ") + "Always open new windows", action: "click-new" },
+              { label: (mode === "live" ? "✓  " : "   ") + "Live previews", action: "previews-live" },
+              { label: (mode === "still" ? "✓  " : "   ") + "Still previews", action: "previews-still" },
+              { label: (mode === "off" ? "✓  " : "   ") + "No previews (icons only)", action: "previews-off" }]
     }
     if (entry.isFolder)
       return [{ label: "Open", action: "open" },
@@ -577,6 +584,12 @@ Item {
     root.menuArmed = false
   }
 
+  // A hand-edited or unknown value reads as live.
+  function previewMode() {
+    var mode = prefs.previews
+    return mode === "still" || mode === "off" ? mode : "live"
+  }
+
   function runMenuAction(action) {
     var entry = root.menuEntry
     if (!entry) return
@@ -607,6 +620,11 @@ Item {
     case "click-switch":
     case "click-new":
       prefs.clickLaunchesNew = action === "click-new"
+      break
+    case "previews-live":
+    case "previews-still":
+    case "previews-off":
+      prefs.previews = action.slice(9)
       break
     case "favourite":
       root.setFavourite(id, !root.isFavourite(id))
@@ -1892,16 +1910,16 @@ Item {
                   // with it; end the drag rather than leave it stuck.
                   Component.onDestruction: if (dragged) root.cancelDrag()
 
-                  // Live picture of the window. Capture only runs while the
-                  // cards are actually on screen; otherwise the source is
-                  // dropped and the box falls back to the app icon.
+                  // Picture of the window. Capture only runs while the cards
+                  // are actually on screen; otherwise the source is dropped
+                  // and the box falls back to the app icon. Still mode takes
+                  // one frame each time the source is set.
                   ScreencopyView {
                     id: preview
                     anchors.fill: parent
                     anchors.margins: 1
-                    live: true
-                    captureSource: root.opened && root.stripExpanded ? windowBox.modelData.wayland : null
-                  }
+                    live: root.previewMode() === "live"
+                    captureSource: root.opened && root.stripExpanded && root.previewMode() !== "off" ? windowBox.modelData.wayland : null                  }
 
                   // Centred while there's no picture, then a corner badge.
                   Image {

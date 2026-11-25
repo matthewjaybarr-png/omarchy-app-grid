@@ -83,7 +83,8 @@ it. Drag a window onto another card to move it there; middle-click it (or
 hover and click its ×) to close it. Closing asks the app nicely, so one with
 unsaved work shows its own save prompt — behind the grid, until you dismiss
 the grid. Previews only run while the cards are open; folded, the strip costs
-nothing.
+nothing. On slower machines, pick **Still previews** (one picture per window
+when the cards appear) or **No previews** (app icons only) from the gear menu.
 
 From the keyboard, press `Up` from the grid's top row to enter the strip: `Left`/`Right`
 pick a workspace, `Tab` steps through its windows, `Enter` switches,
@@ -129,6 +130,8 @@ and drop the binding you added.
   - Other layouts and interactions haven't been verified. Reports welcome.
 - Live previews use Wayland screencopy. With four windows previewing, the shell
   sat around 12–15% of one core on the test laptop; folded or closed, 0%.
+  With one window open, Still and No previews cost about the same as the
+  open grid with no cards (2–3% above closed), against about 9% for Live.
 - `omarchy-shell shell call matthewjaybarr.app-grid debugState x` dumps the
   grid's state as JSON (the trailing argument is required). Handy in a bug
   report.
