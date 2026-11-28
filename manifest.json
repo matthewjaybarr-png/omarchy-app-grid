@@ -5,7 +5,7 @@
   "version": "0.5.5",
   "author": "Matt Barr",
   "license": "MIT",
-  "homepage": "https://github.com/matthewjaybarr-png/omarchy-app-grid",
+  "homepage": "https://github.com/GrendelRTG/omarchy-app-grid",
   "description": "GNOME-style full-screen app grid: paged icons, search, favourites dash, folders, drag to reorder, and a workspace overview with live window previews. Opens with SUPER+ALT+SPACE or a 3-finger swipe up that follows your fingers.",
   "kinds": ["menu"],
   "keepLoaded": true,

@@ -12,7 +12,7 @@ Built against Omarchy 4.0.4 (Hyprland 0.56.2, Quickshell 0.3.1).
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/matthewjaybarr-png/omarchy-app-grid.git
+omarchy plugin add https://github.com/GrendelRTG/omarchy-app-grid.git
 omarchy plugin enable matthewjaybarr.app-grid
 ```
 
