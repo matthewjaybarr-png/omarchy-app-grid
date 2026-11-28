@@ -16,6 +16,10 @@ omarchy plugin add https://github.com/GrendelRTG/omarchy-app-grid.git
 omarchy plugin enable matthewjaybarr.app-grid
 ```
 
+The plugin ID keeps its original `matthewjaybarr.` prefix from before the
+GitHub account was renamed; marketplace IDs are permanent, so existing
+installs keep working.
+
 Plugins land disabled so you can read the code first; `enable` is the second
 step on purpose. Then bind a key — in `~/.config/hypr/bindings.lua`:
 
